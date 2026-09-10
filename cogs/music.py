@@ -5,6 +5,8 @@ import yt_dlp
 import asyncio
 import logging
 import random
+import os
+import json
 from typing import Optional
 from ytmusicapi import YTMusic
 
@@ -54,12 +56,20 @@ ytdl_flat = yt_dlp.YoutubeDL(YTDL_FLAT_OPTIONS)
 ytdl_stream = yt_dlp.YoutubeDL(YTDL_STREAM_OPTIONS)
 
 
+STATE_FILE = "bot_state.json"
+
+
 class MusicDashboardView(discord.ui.View):
-    """Interaktywny panel przycisków sterujących dashboardem."""
-    def __init__(self, cog, guild_id: int):
+    """Interaktywny panel przycisków sterujących dashboardem (Persistent View)."""
+    def __init__(self, cog=None, guild_id: Optional[int] = None):
         super().__init__(timeout=None)
         self.cog = cog
         self.guild_id = guild_id
+
+    def _resolve(self, interaction: discord.Interaction):
+        cog = self.cog or interaction.client.get_cog("Music")
+        guild_id = self.guild_id or (interaction.guild.id if interaction.guild else None)
+        return cog, guild_id
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if not interaction.user.voice:
@@ -69,7 +79,8 @@ class MusicDashboardView(discord.ui.View):
 
     @discord.ui.button(emoji="⏯️", label="Pauza / Wznów", style=discord.ButtonStyle.primary, custom_id="sb_play_pause")
     async def play_pause_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        vc = interaction.guild.voice_client
+        cog, guild_id = self._resolve(interaction)
+        vc = interaction.guild.voice_client if interaction.guild else None
         if vc and vc.is_playing():
             vc.pause()
             await interaction.response.send_message("⏸️ Wstrzymano odtwarzanie.", ephemeral=True)
@@ -78,53 +89,70 @@ class MusicDashboardView(discord.ui.View):
             await interaction.response.send_message("▶️ Wznowiono odtwarzanie.", ephemeral=True)
         else:
             await interaction.response.send_message("Odtwarzacz jest bezczynny.", ephemeral=True)
-        await self.cog.update_dashboard(self.guild_id)
+        if cog and guild_id:
+            await cog.update_dashboard(guild_id)
 
     @discord.ui.button(emoji="⏭️", label="Pomiń", style=discord.ButtonStyle.secondary, custom_id="sb_skip")
     async def skip_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        vc = interaction.guild.voice_client
+        cog, guild_id = self._resolve(interaction)
+        vc = interaction.guild.voice_client if interaction.guild else None
         if vc and (vc.is_playing() or vc.is_paused()):
             vc.stop()
             await interaction.response.send_message("⏭️ Pominięto utwór.", ephemeral=True)
         else:
             await interaction.response.send_message("Nic aktualnie nie gra.", ephemeral=True)
-        await self.cog.update_dashboard(self.guild_id)
+        if cog and guild_id:
+            await cog.update_dashboard(guild_id)
 
     @discord.ui.button(emoji="🔀", label="Przelosuj", style=discord.ButtonStyle.secondary, custom_id="sb_shuffle")
     async def shuffle_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        queue = self.cog.get_queue(self.guild_id)
+        cog, guild_id = self._resolve(interaction)
+        if not cog or not guild_id:
+            await interaction.response.send_message("❌ Błąd stanu bota.", ephemeral=True)
+            return
+        queue = cog.get_queue(guild_id)
         if len(queue) < 2:
             await interaction.response.send_message("❌ Za mało utworów w kolejce do przelosowania.", ephemeral=True)
             return
         random.shuffle(queue)
         await interaction.response.send_message(f"🔀 Przelosowano kolejność **{len(queue)}** utworów!", ephemeral=True)
-        await self.cog.update_dashboard(self.guild_id)
+        await cog.update_dashboard(guild_id)
 
     @discord.ui.button(emoji="🔁", label="Powtarzaj", style=discord.ButtonStyle.secondary, custom_id="sb_repeat")
     async def repeat_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        curr = self.cog.repeat_mode.get(self.guild_id, False)
-        self.cog.repeat_mode[self.guild_id] = not curr
-        st = "WŁĄCZONE 🔁" if self.cog.repeat_mode[self.guild_id] else "WYŁĄCZONE ⏹️"
+        cog, guild_id = self._resolve(interaction)
+        if not cog or not guild_id:
+            return
+        curr = cog.repeat_mode.get(guild_id, False)
+        cog.repeat_mode[guild_id] = not curr
+        st = "WŁĄCZONE 🔁" if cog.repeat_mode[guild_id] else "WYŁĄCZONE ⏹️"
         await interaction.response.send_message(f"🔁 Powtarzanie kolejki: **{st}**", ephemeral=True)
-        await self.cog.update_dashboard(self.guild_id)
+        await cog.update_dashboard(guild_id)
 
     @discord.ui.button(emoji="🛑", label="Zatrzymaj", style=discord.ButtonStyle.danger, custom_id="sb_stop")
     async def stop_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        vc = interaction.guild.voice_client
-        await self.cog.update_presence(None)
+        cog, guild_id = self._resolve(interaction)
+        vc = interaction.guild.voice_client if interaction.guild else None
+        if cog:
+            await cog.update_presence(None)
         if vc:
-            self.cog.get_queue(self.guild_id).clear()
-            self.cog.current_song.pop(self.guild_id, None)
+            if cog and guild_id:
+                cog.get_queue(guild_id).clear()
+                cog.current_song.pop(guild_id, None)
             vc.stop()
             await vc.disconnect()
             await interaction.response.send_message("🛑 Zatrzymano muzykę i rozłączono bota.", ephemeral=True)
         else:
             await interaction.response.send_message("Bot nie jest połączony z kanałem głosowym.", ephemeral=True)
-        await self.cog.update_dashboard(self.guild_id)
+        if cog and guild_id:
+            await cog.update_dashboard(guild_id)
 
     @discord.ui.button(emoji="📜", label="Kolejka", style=discord.ButtonStyle.secondary, custom_id="sb_queue", row=1)
     async def queue_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        queue = self.cog.get_queue(self.guild_id)
+        cog, guild_id = self._resolve(interaction)
+        if not cog or not guild_id:
+            return
+        queue = cog.get_queue(guild_id)
         if not queue:
             await interaction.response.send_message("📜 Kolejka jest w tej chwili całkowicie pusta.", ephemeral=True)
             return
@@ -137,18 +165,67 @@ class MusicDashboardView(discord.ui.View):
 
     @discord.ui.button(emoji="🔄", label="Odśwież", style=discord.ButtonStyle.secondary, custom_id="sb_refresh", row=1)
     async def refresh_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.cog.update_dashboard(self.guild_id)
+        cog, guild_id = self._resolve(interaction)
+        if cog and guild_id:
+            await cog.update_dashboard(guild_id)
         await interaction.response.send_message("🔄 Odświeżono stan panelu.", ephemeral=True)
 
 
 class Music(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.queues = {}          # {guild_id: [{'title': str, 'webpage_url': str}, ...]}
-        self.current_song = {}    # {guild_id: dict}
-        self.repeat_mode = {}     # {guild_id: bool}
-        self.music_channels = {}  # {guild_id: int (channel_id)}
-        self.dashboards = {}      # {guild_id: discord.Message}
+        self.queues = {}             # {guild_id: [{'title': str, 'webpage_url': str}, ...]}
+        self.current_song = {}       # {guild_id: dict}
+        self.repeat_mode = {}        # {guild_id: bool}
+        self.music_channels = {}     # {guild_id: int (channel_id)}
+        self.dashboards = {}         # {guild_id: discord.Message}
+        self.dashboard_metadata = {} # {guild_id: {'channel_id': int, 'message_id': int}}
+        self.load_state()
+
+    async def cog_load(self):
+        # Trwałe przyciski panelu działające nawet po restartach bota
+        self.bot.add_view(MusicDashboardView(self))
+
+    def load_state(self):
+        """Wczytuje zapisany stan kanałów i dashboardów z pliku."""
+        try:
+            if os.path.exists(STATE_FILE):
+                with open(STATE_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.music_channels = {int(k): v for k, v in data.get("music_channels", {}).items()}
+                    self.dashboard_metadata = {int(k): v for k, v in data.get("dashboards", {}).items()}
+                    logger.info("Wczytano zapisany stan dashboardów i ograniczeń kanałów.")
+        except Exception as e:
+            logger.warning(f"Nie udało się wczytać stanu z {STATE_FILE}: {e}")
+
+    def save_state(self):
+        """Zapisuje bieżący stan kanałów i dashboardów do pliku."""
+        try:
+            data = {
+                "music_channels": {str(k): v for k, v in self.music_channels.items()},
+                "dashboards": {str(k): v for k, v in self.dashboard_metadata.items()}
+            }
+            with open(STATE_FILE, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            logger.warning(f"Nie udało się zapisać stanu do {STATE_FILE}: {e}")
+
+    async def get_dashboard_message(self, guild_id: int) -> Optional[discord.Message]:
+        """Zwraca obiekt wiadomości dashboardu (z pamięci lub pobierając z Discord API)."""
+        if guild_id in self.dashboards:
+            return self.dashboards[guild_id]
+        meta = self.dashboard_metadata.get(guild_id)
+        if meta:
+            channel = self.bot.get_channel(meta.get("channel_id"))
+            if channel:
+                try:
+                    msg = await channel.fetch_message(meta.get("message_id"))
+                    self.dashboards[guild_id] = msg
+                    return msg
+                except Exception:
+                    self.dashboard_metadata.pop(guild_id, None)
+                    self.save_state()
+        return None
 
     def get_queue(self, guild_id: int):
         """Pobiera (lub tworzy, jeśli brak) kolejkę dla danego serwera."""
@@ -193,7 +270,7 @@ class Music(commands.Cog):
 
     async def update_dashboard(self, guild_id: int):
         """Aktualizuje wiadomość z dashboardem na danym serwerze, jeśli istnieje."""
-        msg = self.dashboards.get(guild_id)
+        msg = await self.get_dashboard_message(guild_id)
         if not msg:
             return
         try:
@@ -693,7 +770,7 @@ class Music(commands.Cog):
         guild_id = interaction.guild.id
 
         if akcja.value == "on":
-            old_msg = self.dashboards.get(guild_id)
+            old_msg = await self.get_dashboard_message(guild_id)
             if old_msg:
                 try:
                     await old_msg.delete()
@@ -705,11 +782,19 @@ class Music(commands.Cog):
             # Panel wysyłamy jako stałą wiadomość na kanale
             msg = await interaction.channel.send(embed=embed, view=view)
             self.dashboards[guild_id] = msg
+            self.dashboard_metadata[guild_id] = {
+                "channel_id": interaction.channel.id,
+                "message_id": msg.id
+            }
+            self.save_state()
             logger.info(f"Utworzono panel dashboardu na kanale #{interaction.channel.name} (G:{guild_id})")
             await interaction.response.send_message("✅ Pomyślnie utworzono interaktywny panel sterowania!", ephemeral=True)
 
         elif akcja.value == "off":
-            old_msg = self.dashboards.pop(guild_id, None)
+            old_msg = await self.get_dashboard_message(guild_id)
+            self.dashboards.pop(guild_id, None)
+            self.dashboard_metadata.pop(guild_id, None)
+            self.save_state()
             if old_msg:
                 try:
                     await old_msg.delete()
@@ -727,10 +812,12 @@ class Music(commands.Cog):
         guild_id = interaction.guild.id
         if kanal:
             self.music_channels[guild_id] = kanal.id
+            self.save_state()
             logger.info(f"Użytkownik {interaction.user} ograniczył bota do kanału #{kanal.name} (G:{guild_id})")
             await interaction.response.send_message(f"🔒 Komendy muzyczne zostały ograniczone do kanału {kanal.mention}.", ephemeral=True)
         else:
             self.music_channels.pop(guild_id, None)
+            self.save_state()
             logger.info(f"Użytkownik {interaction.user} usunął ograniczenie kanału (G:{guild_id})")
             await interaction.response.send_message("🔓 Usunięto ograniczenie kanału. Komendy muzyczne działają teraz na wszystkich kanałach tekstowych.", ephemeral=True)
 

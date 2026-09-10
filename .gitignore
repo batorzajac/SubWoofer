@@ -5,6 +5,7 @@
 # Logi
 *.log
 bot.log
+bot_state.json
 
 # Środowisko wirtualne Pythona
 venv/
