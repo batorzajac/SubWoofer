@@ -7,6 +7,10 @@ import logging
 import random
 import os
 import json
+import re
+import time
+import platform
+import aiohttp
 from typing import Optional
 from ytmusicapi import YTMusic
 
@@ -151,57 +155,136 @@ class QueuePaginationView(discord.ui.View):
         pass
 
 
+class SearchSelect(discord.ui.Select):
+    def __init__(self, cog, guild_id: int, tracks: list):
+        self.cog = cog
+        self.guild_id = guild_id
+        self.tracks = tracks
+
+        options = []
+        for i, t in enumerate(tracks[:5]):
+            desc = f"{t.get('uploader', 'YouTube')} • {t.get('duration', 'N/A')}"
+            options.append(
+                discord.SelectOption(
+                    label=t['title'][:100],
+                    description=desc[:100],
+                    value=str(i),
+                    emoji="🎵"
+                )
+            )
+        super().__init__(placeholder="Choose a track to play...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        idx = int(self.values[0])
+        selected_track = self.tracks[idx]
+
+        if not interaction.user.voice:
+            await interaction.response.send_message("❌ You must join a voice channel!", ephemeral=True)
+            return
+
+        voice_channel = interaction.user.voice.channel
+        voice_client = interaction.guild.voice_client
+
+        if not voice_client:
+            await voice_channel.connect()
+            voice_client = interaction.guild.voice_client
+
+        queue = self.cog.get_queue(self.guild_id)
+        if len(queue) >= MAX_QUEUE_SIZE:
+            await interaction.response.send_message(f"❌ Queue is full ({MAX_QUEUE_SIZE} tracks max)!", ephemeral=True)
+            return
+
+        song_dict = {
+            'title': selected_track['title'],
+            'webpage_url': selected_track['url']
+        }
+        queue.append(song_dict)
+
+        for item in self.view.children:
+            item.disabled = True
+        await interaction.response.edit_message(content=f"✅ Selected: **{selected_track['title']}**", view=self.view)
+
+        if not voice_client.is_playing() and not voice_client.is_paused():
+            self.cog.play_next(interaction)
+            msg = await interaction.followup.send(f"🎵 Now playing: **{selected_track['title']}**")
+        else:
+            msg = await interaction.followup.send(f"➕ Added to queue: **{selected_track['title']}** (Position: {len(queue)}/{MAX_QUEUE_SIZE})")
+
+        if msg:
+            try:
+                await msg.delete(delay=300)
+            except Exception:
+                pass
+
+
+class SearchView(discord.ui.View):
+    def __init__(self, cog, guild_id: int, tracks: list):
+        super().__init__(timeout=60)
+        self.add_item(SearchSelect(cog, guild_id, tracks))
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
+
 def get_help_embed() -> discord.Embed:
-    """Tworzy bogaty, czytelny embed z przewodnikiem i listą komend bota."""
+    """Tworzy przejrzysty przewodnik i spis komend bota w języku angielskim."""
     embed = discord.Embed(
-        title="🎧 SubWoofer — Przewodnik i Lista Komend",
+        title="🎧 SubWoofer — Guide & Commands",
         description=(
-            "Witaj! **SubWoofer** to nowoczesny bot muzyczny 24/7 stworzony dla Discorda.\n"
-            "Obsługuje YouTube, YouTube Music, kolejki do 500 utworów oraz interaktywny Dashboard!\n\n"
-            "**Szybki start:** Wejdź na kanał głosowy i wpisz np. `/play kastet thc` lub wklej link z YouTube!"
+            "Welcome to **SubWoofer**! A modern 24/7 Discord music bot with Spotify & YouTube support, "
+            "queue up to 500 tracks, auto-disconnect, volume control, and an interactive dashboard!\n\n"
+            "**Quick Start:** Join a voice channel and type `/play <song or link>` (supports YouTube, YouTube Music & Spotify)!"
         ),
         color=discord.Color.from_rgb(88, 101, 242)
     )
 
     embed.add_field(
-        name="🎵 Odtwarzanie & Wyszukiwanie",
+        name="🎵 Playback & Search",
         value=(
-            "• `/play <tytul_lub_link>` — Odtwarza utwór lub całą playlistę (z YouTube / YouTube Music)\n"
-            "• `/nowplaying` — Informacje o aktualnie odtwarzanym utworze (czas, autor, link)\n"
-            "• `/pause` — Wstrzymuje aktualny utwór\n"
-            "• `/resume` — Wznawia wstrzymane odtwarzanie"
+            "• `/play <query>` — Play a song or playlist (YouTube, YT Music, Spotify)\n"
+            "• `/search <query>` — Search YouTube and choose from top 5 interactive results\n"
+            "• `/nowplaying` — Show info about the currently playing song\n"
+            "• `/pause` — Pause playback\n"
+            "• `/resume` — Resume playback\n"
+            "• `/volume <level>` — Set playback volume (0-100%)"
         ),
         inline=False
     )
 
     embed.add_field(
-        name="📜 Zarządzanie Kolejką (do 500 utworów)",
+        name="📜 Queue Management (up to 500 songs)",
         value=(
-            "• `/queue` — Wyświetla listę nadchodzących utworów (stronicowana po 10)\n"
-            "• `/skip` — Pomija aktualnie odtwarzany utwór\n"
-            "• `/skipto <pozycja>` — Skacze bezpośrednio do wskazanego numeru utworu\n"
-            "• `/playnext <pozycja>` — Przenosi wybrany utwór na sam początek kolejki\n"
-            "• `/shuffle` — Losowo miesza kolejność utworów w kolejce\n"
-            "• `/repeat` — Włącza/wyłącza zapętlenie całej playlisty\n"
-            "• `/stop` — Zatrzymuje muzykę, czyści kolejkę i rozłącza bota"
+            "• `/queue` — View upcoming songs (paginated 10 per page)\n"
+            "• `/skip` — Skip the current song\n"
+            "• `/skipto <position>` — Jump directly to a track number in queue\n"
+            "• `/playnext <position>` — Move a track to the top of the queue\n"
+            "• `/shuffle` — Shuffle songs in the queue\n"
+            "• `/repeat` — Toggle queue loop\n"
+            "• `/stop` — Stop music, clear queue, and disconnect bot"
         ),
         inline=False
     )
 
     embed.add_field(
-        name="🎛️ Panel & Ustawienia Serwera",
+        name="🎛️ Dashboard & Server Settings",
         value=(
-            "• `/dashboard` — Włącza stały panel z przyciskami pod odtwarzaczem\n"
-            "• `/setchannel <#kanal>` — Ogranicza komendy bota do wybranego kanału tekstowego\n"
-            "• `/help` (lub `/pomoc`) — Wyświetla to menu pomocy"
+            "• `/dashboard <action>` — Toggle the interactive player dashboard (on/off)\n"
+            "• `/setchannel [channel]` — Restrict bot commands to a specific text channel\n"
+            "• `/autoleave <action> [minutes]` — Auto-disconnect when voice channel is empty\n"
+            "• `/ping` — Check Discord Gateway & Voice connection latency\n"
+            "• `/status` — View system diagnostics, RAM usage, and uptime\n"
+            "• `/logs [filter] [lines]` — View recent logs or errors (Admin only)\n"
+            "• `/help` — Display this command reference"
         ),
         inline=False
     )
 
     embed.set_footer(
-        text="SubWoofer • Odtwarzanie 24/7 • Kliknij przycisk poniżej, aby otrzymać pomoc na PW"
+        text="SubWoofer • 24/7 High-Quality Audio • Click 'Send to DM' below to save this guide"
     )
     return embed
+
 
 
 class HelpView(discord.ui.View):
@@ -351,6 +434,9 @@ class Music(commands.Cog):
         self.music_channels = {}     # {guild_id: int (channel_id)}
         self.dashboards = {}         # {guild_id: discord.Message}
         self.dashboard_metadata = {} # {guild_id: {'channel_id': int, 'message_id': int}}
+        self.guild_volumes = {}      # {guild_id: int (0-100)}
+        self.auto_leave_config = {}  # {guild_id: {'enabled': bool, 'minutes': int}}
+        self.auto_leave_tasks = {}   # {guild_id: asyncio.Task}
         self.load_state()
 
     async def cog_load(self):
@@ -358,23 +444,27 @@ class Music(commands.Cog):
         self.bot.add_view(MusicDashboardView(self))
 
     def load_state(self):
-        """Wczytuje zapisany stan kanałów i dashboardów z pliku."""
+        """Wczytuje zapisany stan kanałów, dashboardów, głośności i konfiguracji z pliku."""
         try:
             if os.path.exists(STATE_FILE):
                 with open(STATE_FILE, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self.music_channels = {int(k): v for k, v in data.get("music_channels", {}).items()}
                     self.dashboard_metadata = {int(k): v for k, v in data.get("dashboards", {}).items()}
-                    logger.info("Wczytano zapisany stan dashboardów i ograniczeń kanałów.")
+                    self.guild_volumes = {int(k): v for k, v in data.get("guild_volumes", {}).items()}
+                    self.auto_leave_config = {int(k): v for k, v in data.get("auto_leave_config", {}).items()}
+                    logger.info("Wczytano zapisany stan dashboardów, ograniczeń kanałów, głośności i auto-leave.")
         except Exception as e:
             logger.warning(f"Nie udało się wczytać stanu z {STATE_FILE}: {e}")
 
     def save_state(self):
-        """Zapisuje bieżący stan kanałów i dashboardów do pliku."""
+        """Zapisuje bieżący stan kanałów, dashboardów, głośności i konfiguracji do pliku."""
         try:
             data = {
                 "music_channels": {str(k): v for k, v in self.music_channels.items()},
-                "dashboards": {str(k): v for k, v in self.dashboard_metadata.items()}
+                "dashboards": {str(k): v for k, v in self.dashboard_metadata.items()},
+                "guild_volumes": {str(k): v for k, v in self.guild_volumes.items()},
+                "auto_leave_config": {str(k): v for k, v in self.auto_leave_config.items()}
             }
             with open(STATE_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
@@ -413,7 +503,7 @@ class Music(commands.Cog):
         repeat = self.repeat_mode.get(guild_id, False)
 
         embed = discord.Embed(
-            title="🐶 SubWoofer — Interaktywny Panel Muzyczny",
+            title="🐶 SubWoofer",
             color=discord.Color.blue() if (vc and vc.is_playing()) else discord.Color.dark_grey()
         )
 
@@ -507,6 +597,66 @@ class Music(commands.Cog):
             logger.error(f"Błąd ekstrakcji strumienia audio dla {webpage_url}: {e}")
             return None
 
+    async def extract_spotify_info(self, url: str):
+        """Pobiera metadane utworów lub playlist ze Spotify bez potrzeby kluczy API."""
+        match = re.search(r'spotify\.com/(?:[a-z]{2,4}-[a-z]{2,4}/)?(track|playlist|album)/([a-zA-Z0-9]+)', url)
+        if not match:
+            return False, [], None
+        item_type, item_id = match.group(1), match.group(2)
+        embed_url = f"https://open.spotify.com/embed/{item_type}/{item_id}"
+
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+        try:
+            async with aiohttp.ClientSession(headers=headers) as session:
+                async with session.get(embed_url, ssl=False, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        logger.warning(f"Spotify embed zwrócił status {resp.status} dla {url}")
+                        return False, [], None
+                    html = await resp.text()
+
+            next_data = re.search(r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', html)
+            if not next_data:
+                logger.warning(f"Nie znaleziono danych __NEXT_DATA__ w Spotify embed dla {url}")
+                return False, [], None
+
+            parsed = json.loads(next_data.group(1))
+            entity = parsed.get("props", {}).get("pageProps", {}).get("state", {}).get("data", {}).get("entity", {})
+            if not entity:
+                return False, [], None
+
+            if item_type == 'track':
+                title = entity.get('name', 'Unknown Track')
+                artists_list = entity.get('artists', [])
+                artists = ', '.join([a.get('name', '') for a in artists_list if a.get('name')])
+                full_title = f"{title} - {artists}" if artists else title
+                q = f"{title} {artists}".strip()
+                logger.info(f"Rozpoznano utwór Spotify: '{full_title}'")
+                return False, [{'title': full_title, 'webpage_url': f"ytsearch1:{q}"}], None
+
+            elif item_type in ('playlist', 'album'):
+                p_title = entity.get('title') or entity.get('name') or ('Spotify Playlist' if item_type == 'playlist' else 'Spotify Album')
+                track_list = entity.get('trackList', [])
+                songs = []
+                for t in track_list:
+                    if not t:
+                        continue
+                    t_name = t.get('title', 'Unknown Track')
+                    t_sub = t.get('subtitle', '')
+                    full_name = f"{t_name} - {t_sub}" if t_sub else t_name
+                    q = f"{t_name} {t_sub}".strip()
+                    songs.append({'title': full_name, 'webpage_url': f"ytsearch1:{q}"})
+
+                logger.info(f"Rozpoznano {item_type} Spotify: '{p_title}' z {len(songs)} utworami.")
+                return True, songs, p_title
+
+        except Exception as e:
+            logger.error(f"Błąd podczas parsowania linku Spotify {url}: {e}")
+            return False, [], None
+
+        return False, [], None
+
     async def search_items(self, query: str):
         """
         Wyszukuje pojedynczy utwór lub playlistę w trybie leniwym (Lazy Loading).
@@ -514,7 +664,13 @@ class Music(commands.Cog):
         """
         loop = asyncio.get_event_loop()
         logger.info(f"Rozpoczynam wyszukiwanie/ekstrakcję dla: {query}")
-        
+
+        # 0. Przypadek: Link Spotify
+        if "spotify.com" in query:
+            is_pl, sp_songs, sp_title = await self.extract_spotify_info(query)
+            if sp_songs:
+                return is_pl, sp_songs, sp_title
+
         # 1. Przypadek: Link bezpośredni (YouTube, YouTube Music, SoundCloud itp.)
         if query.startswith(('http://', 'https://')):
             try:
@@ -636,7 +792,9 @@ class Music(commands.Cog):
 
         try:
             logger.info(f"Rozpoczynam odtwarzanie utworu: {song['title']} (Serwer: {guild_id})")
-            source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS)
+            raw_source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS)
+            vol = self.guild_volumes.get(guild_id, 100) / 100.0
+            source = discord.PCMVolumeTransformer(raw_source, volume=vol)
 
             def after_playing(error):
                 if error:
@@ -657,18 +815,86 @@ class Music(commands.Cog):
                 await self.update_presence(None)
                 await self.update_dashboard(guild_id)
                 return
-            self.play_next(interaction)
-
     # ==========================================
-    # KOMENDY DISCORDA (SLASH COMMANDS)
+    # SYSTEM AUTO-DISCONNECT PRZY PUSTYM KANALE
     # ==========================================
 
-    @app_commands.command(name="play", description="Wyszukaj utwór lub dodaj playlistę (do 500 utworów w kolejce)")
-    async def play(self, interaction: discord.Interaction, zapytanie: str):
+    @commands.Cog.listener()
+    async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+        guild = member.guild
+        vc = guild.voice_client
+        if not vc or not vc.channel:
+            return
+
+        # Przypadek 1: Bot sam został rozłączony z kanału
+        if member.id == self.bot.user.id:
+            if not after.channel:
+                guild_id = guild.id
+                if guild_id in self.auto_leave_tasks:
+                    self.auto_leave_tasks[guild_id].cancel()
+                    self.auto_leave_tasks.pop(guild_id, None)
+                self.current_song.pop(guild_id, None)
+                self.get_queue(guild_id).clear()
+                await self.update_presence(None)
+                await self.update_dashboard(guild_id)
+                logger.info(f"Bot został odłączony z kanału na serwerze {guild.id}. Stan wyczyszczony.")
+            return
+
+        # Przypadek 2: Sprawdzamy czy na kanale bota są jeszcze ludzie
+        bot_channel = vc.channel
+        human_members = [m for m in bot_channel.members if not m.bot]
+        cfg = self.auto_leave_config.get(guild.id, {'enabled': True, 'minutes': 10})
+
+        if not human_members:
+            if cfg.get('enabled', True):
+                minutes = cfg.get('minutes', 10)
+                if guild.id not in self.auto_leave_tasks or self.auto_leave_tasks[guild.id].done():
+                    logger.info(f"Kanał #{bot_channel.name} opustoszał. Zaplanowano auto-leave za {minutes} min (G:{guild.id}).")
+                    self.auto_leave_tasks[guild.id] = asyncio.create_task(self._auto_leave_timer(guild.id, minutes * 60))
+        else:
+            if guild.id in self.auto_leave_tasks and not self.auto_leave_tasks[guild.id].done():
+                self.auto_leave_tasks[guild.id].cancel()
+                self.auto_leave_tasks.pop(guild.id, None)
+                logger.info(f"Użytkownik dołączył do #{bot_channel.name}. Anulowano timer auto-leave (G:{guild.id}).")
+
+    async def _auto_leave_timer(self, guild_id: int, delay_seconds: int):
+        try:
+            await asyncio.sleep(delay_seconds)
+            guild = self.bot.get_guild(guild_id)
+            if not guild:
+                return
+            vc = guild.voice_client
+            if not vc or not vc.channel:
+                return
+            human_members = [m for m in vc.channel.members if not m.bot]
+            if not human_members:
+                logger.info(f"Auto-disconnect: kanał był pusty przez {delay_seconds // 60} min (G:{guild_id}). Rozłączam.")
+                if vc.is_playing() or vc.is_paused():
+                    vc.stop()
+                if vc.is_connected():
+                    await vc.disconnect()
+                self.current_song.pop(guild_id, None)
+                self.get_queue(guild_id).clear()
+                await self.update_presence(None)
+                await self.update_dashboard(guild_id)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"Błąd w _auto_leave_timer dla serwera {guild_id}: {e}")
+        finally:
+            self.auto_leave_tasks.pop(guild_id, None)
+
+    # ==========================================
+    # DISCORD SLASH COMMANDS (ALL IN ENGLISH)
+    # ==========================================
+
+    @app_commands.command(name="play", description="Play a song or playlist (YouTube, YouTube Music, or Spotify)")
+    @app_commands.describe(query="Song title, search keywords, or URL (YouTube / Spotify)")
+    async def play(self, interaction: discord.Interaction, query: str):
         if not await self.check_channel(interaction):
             return
 
-        logger.info(f"Użytkownik {interaction.user} (G:{interaction.guild.id}) żąda /play [{zapytanie}]")
+        logger.info(f"Użytkownik {interaction.user} (G:{interaction.guild.id}) żąda /play [{query}]")
 
         if not interaction.user.voice:
             await interaction.response.send_message("❌ Musisz dołączyć do kanału głosowego!", ephemeral=True)
@@ -694,9 +920,9 @@ class Music(commands.Cog):
 
         await interaction.response.defer()
 
-        is_playlist, songs, playlist_title = await self.search_items(zapytanie)
+        is_playlist, songs, playlist_title = await self.search_items(query)
         if not songs:
-            logger.error(f"Nie udało się odnaleźć muzyki dla zapytania '{zapytanie}' (G:{interaction.guild.id})")
+            logger.error(f"Nie udało się odnaleźć muzyki dla zapytania '{query}' (G:{interaction.guild.id})")
             err_msg = await interaction.followup.send("❌ Nie znaleziono utworu/playlisty lub wystąpił błąd przy pobieraniu.")
             if err_msg:
                 try:
@@ -708,7 +934,6 @@ class Music(commands.Cog):
         current_len = len(queue)
         available_slots = MAX_QUEUE_SIZE - current_len
 
-        # Samoznikające wiadomości po 5 minutach (delete(delay=300))
         sent_msg = None
         try:
             if is_playlist:
@@ -736,15 +961,73 @@ class Music(commands.Cog):
             if sent_msg:
                 await sent_msg.delete(delay=300)
         except Exception as e:
-            logger.error(f"Błąd podczas wysyłania lub planowania usunięcia wiadomości w /play: {e}")
+            logger.error(f"Błąd podczas wysyłania wiadomości w /play: {e}")
 
         await self.update_dashboard(interaction.guild.id)
 
-        # Jeśli aktualnie nic nie gra, odpalamy pierwszy utwór z kolejki
         if not voice_client.is_playing() and not voice_client.is_paused():
             self.play_next(interaction)
 
-    @app_commands.command(name="repeat", description="Włącza lub wyłącza powtarzanie (zapętlenie) całej kolejki")
+    @app_commands.command(name="search", description="Search YouTube and choose from top 5 interactive results")
+    @app_commands.describe(query="Song title or search keywords")
+    async def search(self, interaction: discord.Interaction, query: str):
+        if not await self.check_channel(interaction):
+            return
+
+        if not interaction.user.voice:
+            await interaction.response.send_message("❌ Musisz dołączyć do kanału głosowego!", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        loop = asyncio.get_event_loop()
+        try:
+            data = await loop.run_in_executor(None, lambda: ytdl_flat.extract_info(f"ytsearch5:{query}", download=False))
+            entries = data.get('entries', []) if data else []
+        except Exception as e:
+            logger.error(f"Błąd w /search dla '{query}': {e}")
+            entries = []
+
+        if not entries:
+            await interaction.followup.send(f"❌ Nie znaleziono wyników dla zapytania `{query}`.", ephemeral=True)
+            return
+
+        tracks = []
+        for e in entries:
+            if not e:
+                continue
+            title = e.get('title', 'Nieznany utwór')
+            url = e.get('url') or e.get('webpage_url')
+            if url and not url.startswith('http'):
+                url = f"https://www.youtube.com/watch?v={url}"
+            dur_sec = e.get('duration')
+            if dur_sec:
+                m, s = divmod(int(dur_sec), 60)
+                dur_str = f"{m}:{s:02d}"
+            else:
+                dur_str = "N/A"
+            uploader = e.get('uploader') or e.get('channel') or "YouTube"
+            tracks.append({'title': title, 'url': url or f"ytsearch1:{query}", 'duration': dur_str, 'uploader': uploader})
+
+        view = SearchView(self, interaction.guild.id, tracks)
+        await interaction.followup.send(f"🔍 **Wyniki wyszukiwania dla:** `{query}`\nWybierz utwór z listy poniżej:", view=view, ephemeral=True)
+
+    @app_commands.command(name="volume", description="Adjust playback volume (0-100%)")
+    @app_commands.describe(level="Volume percentage from 0 to 100")
+    async def volume(self, interaction: discord.Interaction, level: app_commands.Range[int, 0, 100]):
+        if not await self.check_channel(interaction):
+            return
+
+        guild_id = interaction.guild.id
+        self.guild_volumes[guild_id] = level
+        self.save_state()
+
+        vc = interaction.guild.voice_client
+        if vc and vc.source and isinstance(vc.source, discord.PCMVolumeTransformer):
+            vc.source.volume = level / 100.0
+
+        await interaction.response.send_message(f"🔊 Głośność odtwarzacza została ustawiona na **{level}%**.", ephemeral=True)
+
+    @app_commands.command(name="repeat", description="Toggle loop mode for the current playlist")
     async def repeat(self, interaction: discord.Interaction):
         if not await self.check_channel(interaction):
             return
@@ -757,7 +1040,7 @@ class Music(commands.Cog):
         await interaction.response.send_message(f"🔁 Powtarzanie całej kolejki: **{status}**", ephemeral=True)
         await self.update_dashboard(guild_id)
 
-    @app_commands.command(name="shuffle", description="Przelosowuje kolejność utworów w kolejce")
+    @app_commands.command(name="shuffle", description="Randomly shuffle the upcoming songs in the queue")
     async def shuffle(self, interaction: discord.Interaction):
         if not await self.check_channel(interaction):
             return
@@ -772,27 +1055,26 @@ class Music(commands.Cog):
         await interaction.response.send_message(f"🔀 Przelosowano kolejność **{len(queue)}** utworów w kolejce!", ephemeral=True)
         await self.update_dashboard(interaction.guild.id)
 
-    @app_commands.command(name="skipto", description="Wymusza natychmiastowe odtworzenie utworu o wskazanym numerze w kolejce")
-    @app_commands.describe(pozycja="Numer utworu w kolejce do natychmiastowego odtworzenia (od 1)")
-    async def skipto(self, interaction: discord.Interaction, pozycja: int):
+    @app_commands.command(name="skipto", description="Skip directly to a specific track number in the queue")
+    @app_commands.describe(position="Track number in queue to jump to (from 1)")
+    async def skipto(self, interaction: discord.Interaction, position: int):
         if not await self.check_channel(interaction):
             return
 
         queue = self.get_queue(interaction.guild.id)
-        if pozycja < 1 or pozycja > len(queue):
+        if position < 1 or position > len(queue):
             await interaction.response.send_message(
                 f"❌ Nieprawidłowy numer! Podaj pozycję od 1 do {len(queue)}.",
                 ephemeral=True
             )
             return
 
-        # Wyciągamy wskazany utwór i umieszczamy go na pozycji 0 (zagra od razu, reszta kolejki bez zmian)
-        target_song = queue.pop(pozycja - 1)
+        target_song = queue.pop(position - 1)
         queue.insert(0, target_song)
 
         voice_client = interaction.guild.voice_client
         if voice_client and (voice_client.is_playing() or voice_client.is_paused()):
-            logger.info(f"Użytkownik {interaction.user} użył skipto {pozycja}: {target_song['title']} (G:{interaction.guild.id})")
+            logger.info(f"Użytkownik {interaction.user} użył skipto {position}: {target_song['title']} (G:{interaction.guild.id})")
             voice_client.stop()
             await interaction.response.send_message(
                 f"⏭️ Wymuszono odtworzenie: **{target_song['title']}** (pozostałe utwory zachowane w pierwotnym porządku).",
@@ -803,35 +1085,34 @@ class Music(commands.Cog):
 
         await self.update_dashboard(interaction.guild.id)
 
-    @app_commands.command(name="playnext", description="Ustawia wybrany utwór z kolejki jako następny do zagrania")
-    @app_commands.describe(pozycja="Numer utworu w kolejce, który ma zagrać jako następny (od 1)")
-    async def playnext(self, interaction: discord.Interaction, pozycja: int):
+    @app_commands.command(name="playnext", description="Move a track from the queue to play next")
+    @app_commands.describe(position="Track number in queue to move to the front (from 1)")
+    async def playnext(self, interaction: discord.Interaction, position: int):
         if not await self.check_channel(interaction):
             return
 
         queue = self.get_queue(interaction.guild.id)
-        if pozycja < 1 or pozycja > len(queue):
+        if position < 1 or position > len(queue):
             await interaction.response.send_message(
                 f"❌ Nieprawidłowy numer! Podaj pozycję od 1 do {len(queue)}.",
                 ephemeral=True
             )
             return
 
-        # Wyciągamy wybrany utwór i wstawiamy go na sam początek kolejki (indeks 0)
-        song = queue.pop(pozycja - 1)
+        song = queue.pop(position - 1)
         queue.insert(0, song)
         logger.info(f"Użytkownik {interaction.user} ustawił utwór jako następny: {song['title']} (G:{interaction.guild.id})")
         await interaction.response.send_message(f"⏩ Utwór **{song['title']}** zagra teraz jako następny w kolejce!", ephemeral=True)
         await self.update_dashboard(interaction.guild.id)
 
-    @app_commands.command(name="stop", description="Zatrzymuje muzykę, czyści kolejkę i bot opuszcza kanał")
+    @app_commands.command(name="stop", description="Stop music, clear queue, and disconnect bot")
     async def stop(self, interaction: discord.Interaction):
         if not await self.check_channel(interaction):
             return
 
         logger.info(f"Wywołano /stop przez {interaction.user} (G:{interaction.guild.id})")
         voice_client = interaction.guild.voice_client
-        
+
         await self.update_presence(None)
 
         if voice_client:
@@ -846,14 +1127,14 @@ class Music(commands.Cog):
 
         await self.update_dashboard(interaction.guild.id)
 
-    @app_commands.command(name="skip", description="Pomija aktualnie odtwarzany utwór")
+    @app_commands.command(name="skip", description="Skip the currently playing song")
     async def skip(self, interaction: discord.Interaction):
         if not await self.check_channel(interaction):
             return
 
         logger.info(f"Wywołano /skip przez {interaction.user} (G:{interaction.guild.id})")
         voice_client = interaction.guild.voice_client
-        
+
         if voice_client and (voice_client.is_playing() or voice_client.is_paused()):
             voice_client.stop()
             await interaction.response.send_message("⏭️ Pomyślnie pominięto utwór.", ephemeral=True)
@@ -862,24 +1143,24 @@ class Music(commands.Cog):
 
         await self.update_dashboard(interaction.guild.id)
 
-    @app_commands.command(name="queue", description="Pokazuje aktualną kolejkę nadchodzących utworów (do 500)")
+    @app_commands.command(name="queue", description="Display the current song queue (up to 500 tracks)")
     async def queue(self, interaction: discord.Interaction):
         if not await self.check_channel(interaction):
             return
 
         logger.info(f"Wywołano /queue przez {interaction.user} (G:{interaction.guild.id})")
         queue = self.get_queue(interaction.guild.id)
-        
+
         if not queue:
             repeat_status = " (🔁 Repeat: WŁĄCZONE)" if self.repeat_mode.get(interaction.guild.id, False) else ""
             await interaction.response.send_message(f"📜 Kolejka jest w tej chwili całkowicie pusta.{repeat_status}", ephemeral=True)
             return
-        
+
         view = QueuePaginationView(self, interaction.guild.id, page=0)
         embed = view.build_embed()
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
-    @app_commands.command(name="pause", description="Wstrzymuje odtwarzanie aktualnego utworu")
+    @app_commands.command(name="pause", description="Pause playback of the current song")
     async def pause(self, interaction: discord.Interaction):
         if not await self.check_channel(interaction):
             return
@@ -894,7 +1175,7 @@ class Music(commands.Cog):
 
         await self.update_dashboard(interaction.guild.id)
 
-    @app_commands.command(name="resume", description="Wznawia wstrzymane odtwarzanie")
+    @app_commands.command(name="resume", description="Resume paused playback")
     async def resume(self, interaction: discord.Interaction):
         if not await self.check_channel(interaction):
             return
@@ -909,7 +1190,7 @@ class Music(commands.Cog):
 
         await self.update_dashboard(interaction.guild.id)
 
-    @app_commands.command(name="nowplaying", description="Pokazuje informacje o aktualnie odtwarzanym utworze")
+    @app_commands.command(name="nowplaying", description="Show info about the currently playing song")
     async def nowplaying(self, interaction: discord.Interaction):
         if not await self.check_channel(interaction):
             return
@@ -928,19 +1209,19 @@ class Music(commands.Cog):
         else:
             await interaction.response.send_message("W tej chwili nic nie jest odtwarzane.", ephemeral=True)
 
-    @app_commands.command(name="dashboard", description="Włącza lub wyłącza interaktywny panel sterowania muzyką (Dashboard)")
-    @app_commands.describe(akcja="Wybierz, czy chcesz utworzyć nowy panel, czy wyłączyć i usunąć istniejący")
-    @app_commands.choices(akcja=[
-        app_commands.Choice(name="Włącz panel na tym kanale", value="on"),
-        app_commands.Choice(name="Wyłącz i usuń panel", value="off")
+    @app_commands.command(name="dashboard", description="Toggle the persistent interactive music dashboard")
+    @app_commands.describe(action="Turn dashboard ON or OFF on this channel")
+    @app_commands.choices(action=[
+        app_commands.Choice(name="Turn dashboard ON", value="on"),
+        app_commands.Choice(name="Turn dashboard OFF", value="off")
     ])
-    async def dashboard(self, interaction: discord.Interaction, akcja: app_commands.Choice[str]):
+    async def dashboard(self, interaction: discord.Interaction, action: app_commands.Choice[str]):
         if not await self.check_channel(interaction):
             return
 
         guild_id = interaction.guild.id
 
-        if akcja.value == "on":
+        if action.value == "on":
             old_msg = await self.get_dashboard_message(guild_id)
             if old_msg:
                 try:
@@ -950,7 +1231,6 @@ class Music(commands.Cog):
 
             embed = self.generate_dashboard_embed(guild_id)
             view = MusicDashboardView(self, guild_id)
-            # Panel wysyłamy jako stałą wiadomość na kanale
             msg = await interaction.channel.send(embed=embed, view=view)
             self.dashboards[guild_id] = msg
             self.dashboard_metadata[guild_id] = {
@@ -961,7 +1241,7 @@ class Music(commands.Cog):
             logger.info(f"Utworzono panel dashboardu na kanale #{interaction.channel.name} (G:{guild_id})")
             await interaction.response.send_message("✅ Pomyślnie utworzono interaktywny panel sterowania!", ephemeral=True)
 
-        elif akcja.value == "off":
+        elif action.value == "off":
             old_msg = await self.get_dashboard_message(guild_id)
             self.dashboards.pop(guild_id, None)
             self.dashboard_metadata.pop(guild_id, None)
@@ -976,30 +1256,169 @@ class Music(commands.Cog):
             else:
                 await interaction.response.send_message("ℹ️ Na tym serwerze nie ma aktywnego panelu dashboardu.", ephemeral=True)
 
-    @app_commands.command(name="setchannel", description="Ogranicza komendy bota do wybranego kanału tekstowego (lub resetuje)")
-    @app_commands.describe(kanal="Wybierz kanał tekstowy dla bota (pozostaw puste, aby usunąć ograniczenie)")
+    @app_commands.command(name="setchannel", description="Restrict bot commands to a specific text channel (or reset)")
+    @app_commands.describe(channel="Text channel for bot commands (leave empty to allow all)")
     @app_commands.default_permissions(manage_guild=True)
-    async def setchannel(self, interaction: discord.Interaction, kanal: Optional[discord.TextChannel] = None):
+    async def setchannel(self, interaction: discord.Interaction, channel: Optional[discord.TextChannel] = None):
         guild_id = interaction.guild.id
-        if kanal:
-            self.music_channels[guild_id] = kanal.id
+        if channel:
+            self.music_channels[guild_id] = channel.id
             self.save_state()
-            logger.info(f"Użytkownik {interaction.user} ograniczył bota do kanału #{kanal.name} (G:{guild_id})")
-            await interaction.response.send_message(f"🔒 Komendy muzyczne zostały ograniczone do kanału {kanal.mention}.", ephemeral=True)
+            logger.info(f"Użytkownik {interaction.user} ograniczył bota do kanału #{channel.name} (G:{guild_id})")
+            await interaction.response.send_message(f"🔒 Komendy muzyczne zostały ograniczone do kanału {channel.mention}.", ephemeral=True)
         else:
             self.music_channels.pop(guild_id, None)
             self.save_state()
             logger.info(f"Użytkownik {interaction.user} usunął ograniczenie kanału (G:{guild_id})")
             await interaction.response.send_message("🔓 Usunięto ograniczenie kanału. Komendy muzyczne działają teraz na wszystkich kanałach tekstowych.", ephemeral=True)
 
-    @app_commands.command(name="help", description="Wyświetla przewodnik i listę komend bota SubWoofer")
-    async def help_command(self, interaction: discord.Interaction):
-        embed = get_help_embed()
-        view = HelpView(embed)
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+    @app_commands.command(name="autoleave", description="Configure auto-disconnect when the voice channel is empty")
+    @app_commands.describe(
+        action="Action to perform",
+        minutes="Inactivity time in minutes before disconnecting (1-60, default 10)"
+    )
+    @app_commands.choices(action=[
+        app_commands.Choice(name="Status (show current config)", value="status"),
+        app_commands.Choice(name="Enable auto-disconnect", value="enable"),
+        app_commands.Choice(name="Disable auto-disconnect", value="disable")
+    ])
+    @app_commands.default_permissions(manage_guild=True)
+    async def autoleave(
+        self,
+        interaction: discord.Interaction,
+        action: app_commands.Choice[str],
+        minutes: Optional[app_commands.Range[int, 1, 60]] = None
+    ):
+        guild_id = interaction.guild.id
+        cfg = self.auto_leave_config.get(guild_id, {'enabled': True, 'minutes': 10})
 
-    @app_commands.command(name="pomoc", description="Wyświetla przewodnik i listę komend bota SubWoofer (alias /help)")
-    async def pomoc_command(self, interaction: discord.Interaction):
+        if action.value == "status":
+            st = "WŁĄCZONE ✅" if cfg.get('enabled', True) else "WYŁĄCZONE ❌"
+            m = cfg.get('minutes', 10)
+            await interaction.response.send_message(
+                f"⚙️ **Status Auto-disconnect:**\n• Stan: **{st}**\n• Czas bezczynności: **{m} minut** pustego kanału głosowego.",
+                ephemeral=True
+            )
+        elif action.value == "enable":
+            new_min = minutes if minutes is not None else cfg.get('minutes', 10)
+            self.auto_leave_config[guild_id] = {'enabled': True, 'minutes': new_min}
+            self.save_state()
+            await interaction.response.send_message(
+                f"✅ Auto-disconnect został **WŁĄCZONY** z czasem **{new_min} minut**.",
+                ephemeral=True
+            )
+        elif action.value == "disable":
+            self.auto_leave_config[guild_id] = {'enabled': False, 'minutes': cfg.get('minutes', 10)}
+            self.save_state()
+            if guild_id in self.auto_leave_tasks:
+                self.auto_leave_tasks[guild_id].cancel()
+                self.auto_leave_tasks.pop(guild_id, None)
+            await interaction.response.send_message(
+                "🛑 Auto-disconnect został **WYŁĄCZONY**. Bot pozostanie na kanale bez limitu czasu.",
+                ephemeral=True
+            )
+
+    @app_commands.command(name="ping", description="Check Discord Gateway and Voice connection latency")
+    async def ping(self, interaction: discord.Interaction):
+        ws_ping = round(self.bot.latency * 1000)
+        vc = interaction.guild.voice_client if interaction.guild else None
+        voice_ping = None
+        if vc and hasattr(vc, 'average_latency'):
+            voice_ping = round(vc.average_latency * 1000)
+
+        msg = f"🏓 **Pong!**\n• Discord Gateway: `{ws_ping} ms`"
+        if voice_ping is not None:
+            msg += f"\n• Voice WebSocket: `{voice_ping} ms`"
+        await interaction.response.send_message(msg, ephemeral=True)
+
+    @app_commands.command(name="status", description="Show bot diagnostics, system metrics, and uptime")
+    async def status(self, interaction: discord.Interaction):
+        uptime_sec = int(time.time() - getattr(self.bot, 'start_time', time.time()))
+        hours, remainder = divmod(uptime_sec, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        days, hours = divmod(hours, 24)
+        uptime_str = f"{days}d {hours}h {minutes}m {seconds}s" if days else f"{hours}h {minutes}m {seconds}s"
+
+        ram_mb = "N/A"
+        try:
+            with open("/proc/self/status", "r") as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        kb = int(line.split()[1])
+                        ram_mb = f"{round(kb / 1024, 1)} MB"
+                        break
+        except Exception:
+            pass
+
+        guild_count = len(self.bot.guilds)
+        active_vcs = len([vc for vc in self.bot.voice_clients if vc.is_playing() or vc.is_paused()])
+
+        embed = discord.Embed(
+            title="📊 SubWoofer — System Status",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="⏱️ Uptime", value=f"`{uptime_str}`", inline=True)
+        embed.add_field(name="💾 RAM Usage", value=f"`{ram_mb}`", inline=True)
+        embed.add_field(name="🌐 Ping", value=f"`{round(self.bot.latency * 1000)} ms`", inline=True)
+        embed.add_field(name="🏰 Servers", value=f"`{guild_count}`", inline=True)
+        embed.add_field(name="🎵 Active Players", value=f"`{active_vcs}`", inline=True)
+        embed.add_field(name="🐍 Python", value=f"`{platform.python_version()}`", inline=True)
+        embed.add_field(name="📦 discord.py", value=f"`{discord.__version__}`", inline=True)
+        embed.add_field(name="📹 yt-dlp", value=f"`{yt_dlp.version.__version__}`", inline=True)
+        embed.set_footer(text="SubWoofer • 24/7 Discord Music Bot")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="logs", description="View recent system logs or errors (Admin only)")
+    @app_commands.describe(
+        filter="Log filter type",
+        lines="Number of lines to show (5-35, default 15)"
+    )
+    @app_commands.choices(filter=[
+        app_commands.Choice(name="All recent logs", value="all"),
+        app_commands.Choice(name="Errors only (ERROR / CRITICAL)", value="errors"),
+        app_commands.Choice(name="Warnings and errors (WARNING / ERROR)", value="warnings")
+    ])
+    @app_commands.default_permissions(administrator=True)
+    async def logs(
+        self,
+        interaction: discord.Interaction,
+        filter: app_commands.Choice[str],
+        lines: Optional[app_commands.Range[int, 5, 35]] = 15
+    ):
+        log_file = 'bot.log'
+        if not os.path.exists(log_file):
+            await interaction.response.send_message("❌ Nie znaleziono pliku `bot.log`.", ephemeral=True)
+            return
+
+        try:
+            with open(log_file, 'r', encoding='utf-8', errors='replace') as f:
+                all_lines = f.readlines()
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Nie udało się odczytać pliku logów: {e}", ephemeral=True)
+            return
+
+        selected_lines = []
+        if filter.value == "errors":
+            selected_lines = [l for l in all_lines if any(k in l for k in ("ERROR", "CRITICAL", "Traceback", "Exception"))]
+        elif filter.value == "warnings":
+            selected_lines = [l for l in all_lines if any(k in l for k in ("WARNING", "ERROR", "CRITICAL", "Traceback", "Exception"))]
+        else:
+            selected_lines = all_lines
+
+        if not selected_lines:
+            await interaction.response.send_message(f"ℹ️ Brak wpisów w logach dla filtru `{filter.name}`.", ephemeral=True)
+            return
+
+        num_lines = lines if lines else 15
+        output_lines = selected_lines[-num_lines:]
+        content = "".join(output_lines)
+        if len(content) > 1900:
+            content = content[-1900:]
+
+        await interaction.response.send_message(f"📋 **Ostatnie {len(output_lines)} linijek (`{filter.name}`):**\n```log\n{content}\n```", ephemeral=True)
+
+    @app_commands.command(name="help", description="Show guide and command list for SubWoofer")
+    async def help_command(self, interaction: discord.Interaction):
         embed = get_help_embed()
         view = HelpView(embed)
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
@@ -1010,13 +1429,8 @@ class Music(commands.Cog):
         view = HelpView(embed)
         await ctx.send(embed=embed, view=view)
 
-    @commands.command(name="pomoc")
-    async def prefix_pomoc(self, ctx: commands.Context):
-        embed = get_help_embed()
-        view = HelpView(embed)
-        await ctx.send(embed=embed, view=view)
-
 
 async def setup(bot):
     await bot.add_cog(Music(bot))
+
 

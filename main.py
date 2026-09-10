@@ -19,6 +19,9 @@ if os.name == 'nt':
     except Exception:
         pass
 
+from logging.handlers import RotatingFileHandler
+import time
+
 # ==========================================
 # KONFIGURACJA SYSTEMU LOGOWANIA (DEBUG/INFO)
 # ==========================================
@@ -28,8 +31,8 @@ logger.setLevel(logging.INFO)
 # Formater logów (data, nazwa loggera, poziom, wiadomość)
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
-# Zapis do pliku
-file_handler = logging.FileHandler('bot.log', encoding='utf-8')
+# Zapis do pliku z rotacją (max 10 MB per plik, do 5 plików archiwalnych)
+file_handler = RotatingFileHandler('bot.log', maxBytes=10*1024*1024, backupCount=5, encoding='utf-8')
 file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
@@ -50,6 +53,7 @@ class MusicBot(commands.Bot):
         # Definicja uprawnień bota (Intents)
         intents = discord.Intents.default()
         intents.message_content = True
+        self.start_time = time.time()
         
         super().__init__(command_prefix='!', intents=intents, help_command=None)
 
@@ -86,15 +90,14 @@ class MusicBot(commands.Bot):
         except Exception as e:
             logger.warning(f"Błąd resetowania obecności w on_ready: {e}")
 
-        # Błyskawiczna synchronizacja komend bezpośrednio dla podłączonych serwerów (Guild Sync)
-        # Dzięki temu komendy pojawiają się na serwerze od razu, bez czekania do 1h na globalny cache Discorda
+        # Czyszczenie starych komend specyficznych dla gildii, aby uniknąć duplikatów komend w interfejsie Discorda
         for g in self.guilds:
             try:
-                self.tree.copy_global_to(guild=g)
+                self.tree.clear_commands(guild=g)
                 await self.tree.sync(guild=g)
-                logger.info(f"Błyskawicznie zsynchronizowano Slash Commands dla serwera: {g.name} (ID: {g.id})")
+                logger.info(f"Wyczyszczono zdublowane komendy gildyjne dla serwera: {g.name} (ID: {g.id})")
             except Exception as e:
-                logger.warning(f"Błąd synchronizacji komend dla serwera {g.name}: {e}")
+                logger.warning(f"Błąd czyszczenia komend dla serwera {g.name}: {e}")
 
 if __name__ == '__main__':
     bot = MusicBot()
