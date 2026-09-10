@@ -14,5 +14,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Kopiowanie reszty plików bota
 COPY . .
 
-# Uruchomienie aplikacji
-CMD [\"python\", \"main.py\"]
+CMD ["python", "main.py"]

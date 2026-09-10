@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   subwoofer:
     build: .
@@ -10,3 +8,5 @@ services:
       - ./.env:/app/.env
       # Logi również wyciągamy na zewnątrz by były łatwo dostępne
       - ./bot.log:/app/bot.log
+      # Stan bota (zablokowany kanał muzyczny)
+      - ./bot_state.json:/app/bot_state.json
