@@ -151,6 +151,79 @@ class QueuePaginationView(discord.ui.View):
         pass
 
 
+def get_help_embed() -> discord.Embed:
+    """Tworzy bogaty, czytelny embed z przewodnikiem i listą komend bota."""
+    embed = discord.Embed(
+        title="🎧 SubWoofer — Przewodnik i Lista Komend",
+        description=(
+            "Witaj! **SubWoofer** to nowoczesny bot muzyczny 24/7 stworzony dla Discorda.\n"
+            "Obsługuje YouTube, YouTube Music, kolejki do 500 utworów oraz interaktywny Dashboard!\n\n"
+            "**Szybki start:** Wejdź na kanał głosowy i wpisz np. `/play kastet thc` lub wklej link z YouTube!"
+        ),
+        color=discord.Color.from_rgb(88, 101, 242)
+    )
+
+    embed.add_field(
+        name="🎵 Odtwarzanie & Wyszukiwanie",
+        value=(
+            "• `/play <tytul_lub_link>` — Odtwarza utwór lub całą playlistę (z YouTube / YouTube Music)\n"
+            "• `/nowplaying` — Informacje o aktualnie odtwarzanym utworze (czas, autor, link)\n"
+            "• `/pause` — Wstrzymuje aktualny utwór\n"
+            "• `/resume` — Wznawia wstrzymane odtwarzanie"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="📜 Zarządzanie Kolejką (do 500 utworów)",
+        value=(
+            "• `/queue` — Wyświetla listę nadchodzących utworów (stronicowana po 10)\n"
+            "• `/skip` — Pomija aktualnie odtwarzany utwór\n"
+            "• `/skipto <pozycja>` — Skacze bezpośrednio do wskazanego numeru utworu\n"
+            "• `/playnext <pozycja>` — Przenosi wybrany utwór na sam początek kolejki\n"
+            "• `/shuffle` — Losowo miesza kolejność utworów w kolejce\n"
+            "• `/repeat` — Włącza/wyłącza zapętlenie całej playlisty\n"
+            "• `/stop` — Zatrzymuje muzykę, czyści kolejkę i rozłącza bota"
+        ),
+        inline=False
+    )
+
+    embed.add_field(
+        name="🎛️ Panel & Ustawienia Serwera",
+        value=(
+            "• `/dashboard` — Włącza stały panel z przyciskami pod odtwarzaczem\n"
+            "• `/setchannel <#kanal>` — Ogranicza komendy bota do wybranego kanału tekstowego\n"
+            "• `/help` (lub `/pomoc`) — Wyświetla to menu pomocy"
+        ),
+        inline=False
+    )
+
+    embed.set_footer(
+        text="SubWoofer • Odtwarzanie 24/7 • Kliknij przycisk poniżej, aby otrzymać pomoc na PW"
+    )
+    return embed
+
+
+class HelpView(discord.ui.View):
+    """Widok pomocy z interaktywnymi przyciskami (wysyłka na PW, link zaproszenia, GitHub)."""
+    def __init__(self, embed: discord.Embed):
+        super().__init__(timeout=180)
+        self.embed = embed
+
+        # Bezpośredni link zaproszenia bota na inne serwery
+        invite_url = "https://discord.com/oauth2/authorize?client_id=1539396744234934355&permissions=3148800&scope=bot+applications.commands"
+        self.add_item(discord.ui.Button(label="Dodaj bota", url=invite_url, emoji="➕"))
+        self.add_item(discord.ui.Button(label="GitHub", url="https://github.com/batorzajac/SubWoofer", emoji="⭐"))
+
+    @discord.ui.button(label="Wyślij na PW", emoji="📩", style=discord.ButtonStyle.primary)
+    async def send_dm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        try:
+            await interaction.user.send(embed=self.embed)
+            await interaction.response.send_message("✅ Wysłano pełny przewodnik w prywatnej wiadomości!", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ Nie mogłem wysłać wiadomości prywatnej. Sprawdź swoje ustawienia prywatności na Discordzie.", ephemeral=True)
+
+
 class MusicDashboardView(discord.ui.View):
     """Interaktywny panel przycisków sterujących dashboardem (Persistent View)."""
     def __init__(self, cog=None, guild_id: Optional[int] = None):
@@ -164,6 +237,8 @@ class MusicDashboardView(discord.ui.View):
         return cog, guild_id
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.data.get("custom_id") == "sb_help":
+            return True
         if not interaction.user.voice:
             await interaction.response.send_message("❌ Musisz być na kanale głosowym, aby używać przycisków panelu!", ephemeral=True)
             return False
@@ -259,6 +334,12 @@ class MusicDashboardView(discord.ui.View):
         if cog and guild_id:
             await cog.update_dashboard(guild_id)
         await interaction.response.send_message("🔄 Odświeżono stan panelu.", ephemeral=True)
+
+    @discord.ui.button(emoji="❓", label="Pomoc", style=discord.ButtonStyle.secondary, custom_id="sb_help", row=1)
+    async def help_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        embed = get_help_embed()
+        view = HelpView(embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
 class Music(commands.Cog):
@@ -911,6 +992,31 @@ class Music(commands.Cog):
             logger.info(f"Użytkownik {interaction.user} usunął ograniczenie kanału (G:{guild_id})")
             await interaction.response.send_message("🔓 Usunięto ograniczenie kanału. Komendy muzyczne działają teraz na wszystkich kanałach tekstowych.", ephemeral=True)
 
+    @app_commands.command(name="help", description="Wyświetla przewodnik i listę komend bota SubWoofer")
+    async def help_command(self, interaction: discord.Interaction):
+        embed = get_help_embed()
+        view = HelpView(embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @app_commands.command(name="pomoc", description="Wyświetla przewodnik i listę komend bota SubWoofer (alias /help)")
+    async def pomoc_command(self, interaction: discord.Interaction):
+        embed = get_help_embed()
+        view = HelpView(embed)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
+    @commands.command(name="help")
+    async def prefix_help(self, ctx: commands.Context):
+        embed = get_help_embed()
+        view = HelpView(embed)
+        await ctx.send(embed=embed, view=view)
+
+    @commands.command(name="pomoc")
+    async def prefix_pomoc(self, ctx: commands.Context):
+        embed = get_help_embed()
+        view = HelpView(embed)
+        await ctx.send(embed=embed, view=view)
+
 
 async def setup(bot):
     await bot.add_cog(Music(bot))
+
