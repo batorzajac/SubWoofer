@@ -280,6 +280,17 @@ class Music(commands.Cog):
         except (discord.NotFound, discord.HTTPException) as e:
             logger.warning(f"Nie udało się zaktualizować dashboardu na serwerze {guild_id}: {e}")
 
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Po zalogowaniu czyści status obecności i odświeża zapisane panele dashboardów."""
+        is_playing = any(vc.is_playing() for vc in self.bot.voice_clients)
+        if not is_playing:
+            await self.update_presence(None)
+            logger.info("Pomyślnie zresetowano status obecności bota po starcie.")
+
+        for guild_id in list(self.dashboard_metadata.keys()):
+            await self.update_dashboard(guild_id)
+
     async def update_presence(self, song_title: Optional[str] = None):
         """Aktualizuje status profilu bota (Discord Presence) lub czyści go po zakończeniu grania."""
         try:
@@ -288,9 +299,9 @@ class Music(commands.Cog):
                     type=discord.ActivityType.listening,
                     name=song_title[:128]
                 )
-                await self.bot.change_presence(activity=activity)
+                await self.bot.change_presence(activity=activity, status=discord.Status.online)
             else:
-                await self.bot.change_presence(activity=None)
+                await self.bot.change_presence(activity=None, status=discord.Status.online)
         except Exception as e:
             logger.warning(f"Błąd aktualizacji Discord Presence: {e}")
 

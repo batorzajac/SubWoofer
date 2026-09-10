@@ -78,6 +78,14 @@ class MusicBot(commands.Bot):
         logger.info('Oczekuje na komendy od uzytkownikow!')
         logger.info('===================================')
 
+        # Wyczyszczenie statusu obecności po restarcie (jeśli bot nic nie odtwarza)
+        try:
+            if not any(vc.is_playing() for vc in self.voice_clients):
+                await self.change_presence(activity=None, status=discord.Status.online)
+                logger.info("Zresetowano status profilu bota (brak aktywnego odtwarzania).")
+        except Exception as e:
+            logger.warning(f"Błąd resetowania obecności w on_ready: {e}")
+
 if __name__ == '__main__':
     bot = MusicBot()
     token = os.getenv('DISCORD_TOKEN')
