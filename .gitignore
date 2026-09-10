@@ -1,6 +1,7 @@
 # Pliki środowiskowe i sekretne klucze
 .env
 .env.local
+LINK_ZAPROSZENIA.txt
 
 # Logi
 *.log

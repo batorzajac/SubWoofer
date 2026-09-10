@@ -1,12 +1,10 @@
 # SubWoofer - Muzyczny Bot na Discorda 🐶🔊
 
-Zaawansowany, ultralekki i w pełni asynchroniczny bot muzyczny dla platformy **Discord**, napisany w języku **Python 3.10+** z wykorzystaniem **discord.py**, **yt-dlp** oraz **ytmusicapi**. Obsługuje odtwarzanie dźwięku w wysokiej jakości, nowoczesne komendy ukośnikowe (Slash Commands), zaawansowane kolejkowanie per-serwer oraz omijanie restrykcji wiekowych bez konieczności logowania kontem YouTube.
+[🇵🇱 **Polska wersja**](README.md) | [🇬🇧 **English version**](README_EN.md)
 
 ---
 
-> 🔗 **Szybkie dodanie bota na serwer Discord:**  
-> **[Kliknij tutaj, aby zaprosić bota SubWoofer](https://discord.com/oauth2/authorize?client_id=1539396744234934355&permissions=8&scope=bot+applications.commands)**  
-> *(Wymagane uprawnienia administratora lub zarządzania serwerem)*
+Zaawansowany, ultralekki i w pełni asynchroniczny bot muzyczny dla platformy **Discord**, napisany w języku **Python 3.10+** z wykorzystaniem **discord.py**, **yt-dlp** oraz **ytmusicapi**. Obsługuje odtwarzanie dźwięku w wysokiej jakości, nowoczesne komendy ukośnikowe (Slash Commands), zaawansowane kolejkowanie per-serwer oraz omijanie restrykcji wiekowych bez konieczności logowania kontem YouTube.
 
 ---
 

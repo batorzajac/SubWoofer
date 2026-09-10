@@ -1,9 +1,5 @@
 # Dokumentacja Bota Muzycznego (SubWoofer) 🐶🔊
 
-> 🔗 **Link do zaproszenia bota na Twój serwer Discord:**  
-> **[Kliknij tutaj, aby dodać bota SubWoofer](https://discord.com/oauth2/authorize?client_id=1539396744234934355&permissions=8&scope=bot+applications.commands)**  
-> *(Wymaga uprawnień do zarządzania serwerem lub administratora)*
-
 ---
 
 ## Wykorzystane Biblioteki
