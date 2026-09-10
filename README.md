@@ -128,12 +128,12 @@ python main.py
 Najprostszą metodą hostingu produkcyjnego 24/7 jest Docker, który sam pobiera i konfiguruje odpowiednią wersję Pythona oraz FFmpeg:
 
 ```bash
-docker-compose up -d --build
+docker compose up -d --build
 ```
 
 Podgląd logów w czasie rzeczywistym:
 ```bash
-docker-compose logs -f
+docker compose logs -f
 ```
 
 ---
