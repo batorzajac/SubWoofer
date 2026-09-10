@@ -86,6 +86,16 @@ class MusicBot(commands.Bot):
         except Exception as e:
             logger.warning(f"Błąd resetowania obecności w on_ready: {e}")
 
+        # Błyskawiczna synchronizacja komend bezpośrednio dla podłączonych serwerów (Guild Sync)
+        # Dzięki temu komendy pojawiają się na serwerze od razu, bez czekania do 1h na globalny cache Discorda
+        for g in self.guilds:
+            try:
+                self.tree.copy_global_to(guild=g)
+                await self.tree.sync(guild=g)
+                logger.info(f"Błyskawicznie zsynchronizowano Slash Commands dla serwera: {g.name} (ID: {g.id})")
+            except Exception as e:
+                logger.warning(f"Błąd synchronizacji komend dla serwera {g.name}: {e}")
+
 if __name__ == '__main__':
     bot = MusicBot()
     token = os.getenv('DISCORD_TOKEN')
