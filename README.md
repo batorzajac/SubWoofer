@@ -40,6 +40,7 @@ Zaawansowany, ultralekki i w pełni asynchroniczny bot muzyczny dla platformy **
 | `/stop` | *brak* | Zatrzymuje muzykę, czyści całą kolejkę serwera i odłącza bota od kanału głosowego |
 | `/queue` | *brak* | Wyświetla listę oczekujących utworów oraz stan zapełnienia (do 500) w Discord Embed |
 | `/nowplaying` | *brak* | Wyświetla szczegóły i link aktualnie odtwarzanego utworu |
+| `/dashboard` | `akcja` *(Włącz / Wyłącz)* | Włącza interaktywny panel sterowania z przyciskami (Play, Skip, Shuffle itp.) lub go wyłącza |
 | `/setchannel` | `kanal` *(opcjonalnie)* | Ogranicza komendy bota do wybranego kanału tekstowego (lub usuwa ograniczenie) |
 
 ---

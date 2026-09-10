@@ -41,6 +41,7 @@ Choć nie jest to biblioteka Pythona, lecz samodzielne narzędzie systemowe, jes
 * `/stop` - Zatrzymuje odtwarzanie, czyści całą kolejkę serwera i odłącza bota od kanału głosowego.
 * `/queue` - Wyświetla listę oczekujących utworów oraz stan zapełnienia kolejki (np. 42/500) w estetycznym oknie Discord Embed.
 * `/nowplaying` - Wyświetla tytuł i link obecnie granego utworu.
+* `/dashboard [akcja]` - Włącza stały, interaktywny panel z przyciskami (Pauza, Skip, Shuffle, Repeat, Kolejka, Stop) lub go wyłącza.
 * `/setchannel [kanał]` - Ogranicza komendy bota do wybranego kanału tekstowego (lub usuwa ograniczenie).
 
 ## Główne Cechy
