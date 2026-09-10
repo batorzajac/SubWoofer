@@ -90,7 +90,6 @@ SubWoofer/
 ├── main.py                     # Bot entrypoint, rotating logger, gateway sync
 ├── README.md                   # Polish documentation
 ├── README_EN.md                # English documentation
-├── ROADMAP.md                  # Development plans & ideas (P2P / Soulseek streaming)
 └── requirements.txt            # Python dependencies
 ```
 

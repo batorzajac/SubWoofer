@@ -90,7 +90,6 @@ SubWoofer/
 ├── main.py                     # Główny punkt startowy bota, logger z rotacją i sync
 ├── README.md                   # Dokumentacja w języku polskim
 ├── README_EN.md                # Dokumentacja w języku angielskim
-├── ROADMAP.md                  # Plany rozwojowe i pomysły (streaming P2P / Soulseek)
 └── requirements.txt            # Zależności bibliotek Pythona
 ```
 
