@@ -102,16 +102,21 @@ Instalacja zależności:
 pip install -r requirements.txt
 ```
 
-### 2. Wymóg FFmpeg
-* **Windows:** Zainstaluj przez `winget install Gyan.FFmpeg.Essentials` lub umieść `ffmpeg.exe` w folderze bota. *(Aplikacja automatycznie odświeża ścieżkę z rejestru systemowego)*.
-* **Linux (Ubuntu/Debian):** `sudo apt update && sudo apt install -y ffmpeg`
+### 2. Wymagania systemowe (FFmpeg i Node.js)
+* **FFmpeg** (wymagany do transkodowania dźwięku):
+  * **Windows:** Zainstaluj przez `winget install Gyan.FFmpeg.Essentials` lub umieść `ffmpeg.exe` w folderze bota. *(Aplikacja automatycznie odświeża ścieżkę z rejestru systemowego)*.
+  * **Linux (Ubuntu/Debian):** `sudo apt update && sudo apt install -y ffmpeg`
+* **Node.js** (wymagany przez silnik yt-dlp do rozwiązywania zabezpieczeń JavaScript YouTube):
+  * **Windows:** Zainstaluj ze strony [nodejs.org](https://nodejs.org/) lub przez `winget install OpenJS.NodeJS.LTS`.
+  * **Linux (Ubuntu/Debian):** `sudo apt install -y nodejs`
 
 ### 3. Konfiguracja tokenu
 Skopiuj plik `.env.example` do `.env`:
 ```bash
 cp .env.example .env
 ```
-Otwórz `.env` i wklej swój token z [Discord Developer Portal](https://discord.com/developers/applications).
+Otwórz `.env` i wklej swój token bota z [Discord Developer Portal](https://discord.com/developers/applications).
+*(Bot zadziała z dowolnym tokenem i kontem bota Discord!)*
 
 ### 4. Uruchomienie bota
 ```bash

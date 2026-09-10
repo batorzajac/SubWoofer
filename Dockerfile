@@ -1,8 +1,8 @@
 FROM python:3.11-slim
 
-# Instalacja ffmpeg, który jest niezbędny do przetwarzania audio
+# Instalacja ffmpeg oraz nodejs (niezbędnych do przetwarzania audio i rozwiązywania skryptów YouTube)
 RUN apt-get update && \
-    apt-get install -y ffmpeg && \
+    apt-get install -y ffmpeg nodejs && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
