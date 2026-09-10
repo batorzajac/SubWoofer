@@ -68,6 +68,20 @@ class Music(commands.Cog):
             self.queues[guild_id] = []
         return self.queues[guild_id]
 
+    async def update_presence(self, song_title: Optional[str] = None):
+        """Aktualizuje status profilu bota (Discord Presence) lub czyści go po zakończeniu grania."""
+        try:
+            if song_title:
+                activity = discord.Activity(
+                    type=discord.ActivityType.listening,
+                    name=song_title[:128]
+                )
+                await self.bot.change_presence(activity=activity)
+            else:
+                await self.bot.change_presence(activity=None)
+        except Exception as e:
+            logger.warning(f"Błąd aktualizacji Discord Presence: {e}")
+
     async def check_channel(self, interaction: discord.Interaction) -> bool:
         """Weryfikuje, czy komenda została wpisana na dozwolonym kanale tekstowym."""
         allowed_id = self.music_channels.get(interaction.guild.id)
@@ -186,12 +200,14 @@ class Music(commands.Cog):
 
         if not voice_client or not voice_client.is_connected():
             logger.warning(f"Zażądano _play_next_async, ale brak VoiceClienta na serwerze {guild_id}")
+            await self.update_presence(None)
             return
 
         # Jeśli kolejka jest pusta
         if not queue:
             self.current_song.pop(guild_id, None)
             logger.info(f"Kolejka odtwarzania na serwerze {guild_id} dobiegła końca.")
+            await self.update_presence(None)
             
             # Jeśli repeat nie jest włączony -> automatyczne rozłączenie z kanału głosowego
             if not self.repeat_mode.get(guild_id, False):
@@ -212,11 +228,11 @@ class Music(commands.Cog):
         stream_url = await self.get_stream_url(song['webpage_url'])
         if not stream_url:
             logger.warning(f"Nie udało się wyciągnąć strumienia dla '{song['title']}', pomijam...")
-            # W przypadku błędu i pustej kolejki rozłączamy się
             if not queue and not self.repeat_mode.get(guild_id, False):
                 if voice_client.is_connected():
                     await voice_client.disconnect()
                     logger.info(f"Rozłączono po błędzie odtwarzania ostatniego utworu (G:{guild_id}).")
+                await self.update_presence(None)
                 return
             self.play_next(interaction)
             return
@@ -231,13 +247,16 @@ class Music(commands.Cog):
                 self.play_next(interaction)
 
             voice_client.play(source, after=after_playing)
-            # Uwaga: Usunięto wysyłanie wiadomości "Teraz odtwarzam..." na czacie zgodnie z życzeniem użytkownika
+            
+            # Ciche odtwarzanie + Discord Presence (Słucha: Tytuł piosenki)
+            await self.update_presence(song['title'])
 
         except Exception as e:
             logger.error(f"Wystąpił błąd w FFmpeg podczas startu odtwarzania na serwerze {guild_id}: {e}")
             if not queue and not self.repeat_mode.get(guild_id, False):
                 if voice_client.is_connected():
                     await voice_client.disconnect()
+                await self.update_presence(None)
                 return
             self.play_next(interaction)
 
@@ -279,12 +298,13 @@ class Music(commands.Cog):
         is_playlist, songs, playlist_title = await self.search_items(zapytanie)
         if not songs:
             logger.error(f"Nie udało się odnaleźć muzyki dla zapytania '{zapytanie}' (G:{interaction.guild.id})")
-            await interaction.followup.send("❌ Nie znaleziono utworu/playlisty lub wystąpił błąd przy pobieraniu.")
+            await interaction.followup.send("❌ Nie znaleziono utworu/playlisty lub wystąpił błąd przy pobieraniu.", ephemeral=True)
             return
 
         current_len = len(queue)
         available_slots = MAX_QUEUE_SIZE - current_len
 
+        # Samoznikające wiadomości po 5 minutach (delete_after=300)
         if is_playlist:
             total_playlist_songs = len(songs)
             if total_playlist_songs > available_slots:
@@ -292,20 +312,22 @@ class Music(commands.Cog):
                 queue.extend(songs_to_add)
                 await interaction.followup.send(
                     f"⚠️ **Dodano {len(songs_to_add)} utworów z playlisty '{playlist_title}'!**\n"
-                    f"Osiągnięto limit **{MAX_QUEUE_SIZE}** utworów w kolejce (pominięto {total_playlist_songs - available_slots} nadmiarowych utworów)."
+                    f"Osiągnięto limit **{MAX_QUEUE_SIZE}** utworów w kolejce (pominięto {total_playlist_songs - available_slots} nadmiarowych utworów).",
+                    delete_after=300
                 )
             else:
                 queue.extend(songs)
                 await interaction.followup.send(
-                    f"📑 **Dodano playlistę:** `{playlist_title}` ({len(songs)} utworów) do kolejki! 🎶 (Łącznie w kolejce: {len(queue)}/{MAX_QUEUE_SIZE})"
+                    f"📑 **Dodano playlistę:** `{playlist_title}` ({len(songs)} utworów) do kolejki! 🎶 (Łącznie w kolejce: {len(queue)}/{MAX_QUEUE_SIZE})",
+                    delete_after=300
                 )
         else:
             song = songs[0]
             queue.append(song)
             if not voice_client.is_playing() and not voice_client.is_paused():
-                await interaction.followup.send(f"🎵 Załadowano: **{song['title']}**...")
+                await interaction.followup.send(f"🎵 Załadowano: **{song['title']}**...", delete_after=300)
             else:
-                await interaction.followup.send(f"➕ Dodano do kolejki: **{song['title']}** (Pozycja: {len(queue)}/{MAX_QUEUE_SIZE})")
+                await interaction.followup.send(f"➕ Dodano do kolejki: **{song['title']}** (Pozycja: {len(queue)}/{MAX_QUEUE_SIZE})", delete_after=300)
 
         # Jeśli aktualnie nic nie gra, odpalamy pierwszy utwór z kolejki
         if not voice_client.is_playing() and not voice_client.is_paused():
@@ -321,7 +343,7 @@ class Music(commands.Cog):
         self.repeat_mode[guild_id] = not current
         status = "WŁĄCZONE 🔁" if self.repeat_mode[guild_id] else "WYŁĄCZONE ⏹️"
         logger.info(f"Użytkownik {interaction.user} zmienił repeat na: {status} (G:{guild_id})")
-        await interaction.response.send_message(f"🔁 Powtarzanie całej kolejki: **{status}**")
+        await interaction.response.send_message(f"🔁 Powtarzanie całej kolejki: **{status}**", ephemeral=True)
 
     @app_commands.command(name="shuffle", description="Przelosowuje kolejność utworów w kolejce")
     async def shuffle(self, interaction: discord.Interaction):
@@ -335,10 +357,10 @@ class Music(commands.Cog):
 
         random.shuffle(queue)
         logger.info(f"Użytkownik {interaction.user} przelosował kolejkę (G:{interaction.guild.id})")
-        await interaction.response.send_message(f"🔀 Przelosowano kolejność **{len(queue)}** utworów w kolejce!")
+        await interaction.response.send_message(f"🔀 Przelosowano kolejność **{len(queue)}** utworów w kolejce!", ephemeral=True)
 
-    @app_commands.command(name="skipto", description="Przeskakuje bezpośrednio do wybranego numeru w kolejce")
-    @app_commands.describe(pozycja="Numer utworu w kolejce (od 1)")
+    @app_commands.command(name="skipto", description="Wymusza natychmiastowe odtworzenie utworu o wskazanym numerze w kolejce")
+    @app_commands.describe(pozycja="Numer utworu w kolejce do natychmiastowego odtworzenia (od 1)")
     async def skipto(self, interaction: discord.Interaction, pozycja: int):
         if not await self.check_channel(interaction):
             return
@@ -351,15 +373,18 @@ class Music(commands.Cog):
             )
             return
 
-        # Usuwamy utwory poprzedzające wybraną pozycję
-        target_song = queue[pozycja - 1]
-        del queue[:pozycja - 1]
+        # Wyciągamy wskazany utwór i umieszczamy go na pozycji 0 (zagra od razu, reszta kolejki bez zmian)
+        target_song = queue.pop(pozycja - 1)
+        queue.insert(0, target_song)
 
         voice_client = interaction.guild.voice_client
         if voice_client and (voice_client.is_playing() or voice_client.is_paused()):
             logger.info(f"Użytkownik {interaction.user} użył skipto {pozycja}: {target_song['title']} (G:{interaction.guild.id})")
             voice_client.stop()
-            await interaction.response.send_message(f"⏭️ Przeskoczono do utworu nr {pozycja}: **{target_song['title']}**.")
+            await interaction.response.send_message(
+                f"⏭️ Wymuszono odtworzenie: **{target_song['title']}** (pozostałe utwory zachowane w pierwotnym porządku).",
+                ephemeral=True
+            )
         else:
             await interaction.response.send_message("Bot nie odtwarza obecnie muzyki.", ephemeral=True)
 
@@ -381,7 +406,7 @@ class Music(commands.Cog):
         song = queue.pop(pozycja - 1)
         queue.insert(0, song)
         logger.info(f"Użytkownik {interaction.user} ustawił utwór jako następny: {song['title']} (G:{interaction.guild.id})")
-        await interaction.response.send_message(f"⏩ Utwór **{song['title']}** zagra teraz jako następny w kolejce!")
+        await interaction.response.send_message(f"⏩ Utwór **{song['title']}** zagra teraz jako następny w kolejce!", ephemeral=True)
 
     @app_commands.command(name="stop", description="Zatrzymuje muzykę, czyści kolejkę i bot opuszcza kanał")
     async def stop(self, interaction: discord.Interaction):
@@ -391,13 +416,15 @@ class Music(commands.Cog):
         logger.info(f"Wywołano /stop przez {interaction.user} (G:{interaction.guild.id})")
         voice_client = interaction.guild.voice_client
         
+        await self.update_presence(None)
+
         if voice_client:
             self.get_queue(interaction.guild.id).clear()
             self.current_song.pop(interaction.guild.id, None)
             voice_client.stop()
             await voice_client.disconnect()
             logger.info(f"Oczyszczono kolejkę i rozłączono kanał na (G:{interaction.guild.id})")
-            await interaction.response.send_message("🛑 Zatrzymano muzykę i wyczyszczono kolejkę. Bot opuścił kanał.")
+            await interaction.response.send_message("🛑 Zatrzymano muzykę i wyczyszczono kolejkę. Bot opuścił kanał.", ephemeral=True)
         else:
             await interaction.response.send_message("Bot aktualnie nie odtwarza muzyki na żadnym kanale głosowym.", ephemeral=True)
 
@@ -411,7 +438,7 @@ class Music(commands.Cog):
         
         if voice_client and (voice_client.is_playing() or voice_client.is_paused()):
             voice_client.stop()
-            await interaction.response.send_message("⏭️ Pomyślnie pominięto utwór.")
+            await interaction.response.send_message("⏭️ Pomyślnie pominięto utwór.", ephemeral=True)
         else:
             await interaction.response.send_message("Obecnie nie odtwarzam żadnego utworu.", ephemeral=True)
 
@@ -425,7 +452,7 @@ class Music(commands.Cog):
         
         if not queue:
             repeat_status = " (🔁 Repeat: WŁĄCZONE)" if self.repeat_mode.get(interaction.guild.id, False) else ""
-            await interaction.response.send_message(f"📜 Kolejka jest w tej chwili całkowicie pusta.{repeat_status}")
+            await interaction.response.send_message(f"📜 Kolejka jest w tej chwili całkowicie pusta.{repeat_status}", ephemeral=True)
             return
         
         total = len(queue)
@@ -441,7 +468,7 @@ class Music(commands.Cog):
         if total > 10:
             embed.set_footer(text=f"I {total - 10} innych utworów na liście...")
             
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="pause", description="Wstrzymuje odtwarzanie aktualnego utworu")
     async def pause(self, interaction: discord.Interaction):
@@ -452,7 +479,7 @@ class Music(commands.Cog):
         voice_client = interaction.guild.voice_client
         if voice_client and voice_client.is_playing():
             voice_client.pause()
-            await interaction.response.send_message("⏸️ Wstrzymano odtwarzanie.")
+            await interaction.response.send_message("⏸️ Wstrzymano odtwarzanie.", ephemeral=True)
         else:
             await interaction.response.send_message("Obecnie żaden utwór nie jest odtwarzany.", ephemeral=True)
 
@@ -465,7 +492,7 @@ class Music(commands.Cog):
         voice_client = interaction.guild.voice_client
         if voice_client and voice_client.is_paused():
             voice_client.resume()
-            await interaction.response.send_message("▶️ Wznowiono odtwarzanie.")
+            await interaction.response.send_message("▶️ Wznowiono odtwarzanie.", ephemeral=True)
         else:
             await interaction.response.send_message("Odtwarzanie nie jest wstrzymane.", ephemeral=True)
 
@@ -484,7 +511,7 @@ class Music(commands.Cog):
             )
             if song.get('webpage_url'):
                 embed.add_field(name="Link", value=song['webpage_url'], inline=False)
-            await interaction.response.send_message(embed=embed)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
         else:
             await interaction.response.send_message("W tej chwili nic nie jest odtwarzane.", ephemeral=True)
 
@@ -496,11 +523,11 @@ class Music(commands.Cog):
         if kanal:
             self.music_channels[guild_id] = kanal.id
             logger.info(f"Użytkownik {interaction.user} ograniczył bota do kanału #{kanal.name} (G:{guild_id})")
-            await interaction.response.send_message(f"🔒 Komendy muzyczne zostały ograniczone do kanału {kanal.mention}.")
+            await interaction.response.send_message(f"🔒 Komendy muzyczne zostały ograniczone do kanału {kanal.mention}.", ephemeral=True)
         else:
             self.music_channels.pop(guild_id, None)
             logger.info(f"Użytkownik {interaction.user} usunął ograniczenie kanału (G:{guild_id})")
-            await interaction.response.send_message("🔓 Usunięto ograniczenie kanału. Komendy muzyczne działają teraz na wszystkich kanałach tekstowych.")
+            await interaction.response.send_message("🔓 Usunięto ograniczenie kanału. Komendy muzyczne działają teraz na wszystkich kanałach tekstowych.", ephemeral=True)
 
 
 async def setup(bot):
