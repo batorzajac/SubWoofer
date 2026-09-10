@@ -438,36 +438,46 @@ class Music(commands.Cog):
         is_playlist, songs, playlist_title = await self.search_items(zapytanie)
         if not songs:
             logger.error(f"Nie udało się odnaleźć muzyki dla zapytania '{zapytanie}' (G:{interaction.guild.id})")
-            await interaction.followup.send("❌ Nie znaleziono utworu/playlisty lub wystąpił błąd przy pobieraniu.", ephemeral=True)
+            err_msg = await interaction.followup.send("❌ Nie znaleziono utworu/playlisty lub wystąpił błąd przy pobieraniu.")
+            if err_msg:
+                try:
+                    await err_msg.delete(delay=30)
+                except Exception:
+                    pass
             return
 
         current_len = len(queue)
         available_slots = MAX_QUEUE_SIZE - current_len
 
-        # Samoznikające wiadomości po 5 minutach (delete_after=300)
-        if is_playlist:
-            total_playlist_songs = len(songs)
-            if total_playlist_songs > available_slots:
-                songs_to_add = songs[:available_slots]
-                queue.extend(songs_to_add)
-                await interaction.followup.send(
-                    f"⚠️ **Dodano {len(songs_to_add)} utworów z playlisty '{playlist_title}'!**\n"
-                    f"Osiągnięto limit **{MAX_QUEUE_SIZE}** utworów w kolejce (pominięto {total_playlist_songs - available_slots} nadmiarowych utworów).",
-                    delete_after=300
-                )
+        # Samoznikające wiadomości po 5 minutach (delete(delay=300))
+        sent_msg = None
+        try:
+            if is_playlist:
+                total_playlist_songs = len(songs)
+                if total_playlist_songs > available_slots:
+                    songs_to_add = songs[:available_slots]
+                    queue.extend(songs_to_add)
+                    sent_msg = await interaction.followup.send(
+                        f"⚠️ **Dodano {len(songs_to_add)} utworów z playlisty '{playlist_title}'!**\n"
+                        f"Osiągnięto limit **{MAX_QUEUE_SIZE}** utworów w kolejce (pominięto {total_playlist_songs - available_slots} nadmiarowych utworów)."
+                    )
+                else:
+                    queue.extend(songs)
+                    sent_msg = await interaction.followup.send(
+                        f"📑 **Dodano playlistę:** `{playlist_title}` ({len(songs)} utworów) do kolejki! 🎶 (Łącznie w kolejce: {len(queue)}/{MAX_QUEUE_SIZE})"
+                    )
             else:
-                queue.extend(songs)
-                await interaction.followup.send(
-                    f"📑 **Dodano playlistę:** `{playlist_title}` ({len(songs)} utworów) do kolejki! 🎶 (Łącznie w kolejce: {len(queue)}/{MAX_QUEUE_SIZE})",
-                    delete_after=300
-                )
-        else:
-            song = songs[0]
-            queue.append(song)
-            if not voice_client.is_playing() and not voice_client.is_paused():
-                await interaction.followup.send(f"🎵 Załadowano: **{song['title']}**...", delete_after=300)
-            else:
-                await interaction.followup.send(f"➕ Dodano do kolejki: **{song['title']}** (Pozycja: {len(queue)}/{MAX_QUEUE_SIZE})", delete_after=300)
+                song = songs[0]
+                queue.append(song)
+                if not voice_client.is_playing() and not voice_client.is_paused():
+                    sent_msg = await interaction.followup.send(f"🎵 Załadowano: **{song['title']}**...")
+                else:
+                    sent_msg = await interaction.followup.send(f"➕ Dodano do kolejki: **{song['title']}** (Pozycja: {len(queue)}/{MAX_QUEUE_SIZE})")
+
+            if sent_msg:
+                await sent_msg.delete(delay=300)
+        except Exception as e:
+            logger.error(f"Błąd podczas wysyłania lub planowania usunięcia wiadomości w /play: {e}")
 
         await self.update_dashboard(interaction.guild.id)
 
