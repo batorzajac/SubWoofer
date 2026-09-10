@@ -12,7 +12,9 @@ Zaawansowany, ultralekki i w pełni asynchroniczny bot muzyczny dla platformy **
 
 ## 🚀 Główne Możliwości i Funkcje
 
-- **Wieloplatformowe źródła dźwięku:** Odtwarzanie bezpośrednio z **YouTube**, **YouTube Music** oraz **SoundCloud** (obsługa bezpośrednich linków oraz wyszukiwania tekstowego).
+- **Wieloplatformowe źródła dźwięku i obsługa Playlist:** Odtwarzanie pojedynczych utworów oraz całych **playlist YouTube / YouTube Music** i **SoundCloud** (do 500 utworów w kolejce).
+- **Inteligentne Leniwe Ładowanie (Lazy Loading):** Import playlist odbywa się błyskawicznie (w ~2 sekundy pobierane są metadane), a bezpośredni strumień audio generowany jest tuż przed startem każdego utworu. Dzięki temu linki nigdy nie wygasają, a YouTube nie nakłada blokad rate-limit.
+- **Twardy limit kolejki (500 utworów):** Automatyczna ochrona przed przeciążeniem i spamem – bot powiadamia użytkownika w przypadku próby przekroczenia limitu.
 - **Omijanie blokad wiekowych (Age-Restricted Bypass):** Zaawansowany *client spoofing* w `yt-dlp` (emulacja klientów Android/Web), pozwalający na odtwarzanie materiałów z restrykcją 18+ całkowicie bez logowania czy konieczności eksportu ciasteczek.
 - **Wielopoziomowe Wyszukiwanie:** Błyskawiczne dopasowywanie utworów i metadanych przez `ytmusicapi` z automatycznym przełączaniem (fallback) na ogólną wyszukiwarkę `yt-dlp` w razie nietypowych tytułów.
 - **Dynamiczny System Kolejkowania (Queue):** Niezależna kolejka odtwarzania w pamięci podręcznej dla każdego serwera Discord, automatyczne odtwarzanie kolejnych pozycji i powiadomienia na czacie.

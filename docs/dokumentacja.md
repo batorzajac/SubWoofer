@@ -30,15 +30,17 @@ Mała biblioteka do bezpiecznego wczytywania zmiennych środowiskowych z pliku `
 Choć nie jest to biblioteka Pythona, lecz samodzielne narzędzie systemowe, jest kluczowe w procesie odtwarzania. W tle konwertuje strumień danych przechwytywany przez `yt-dlp` na format audio, który akceptuje Discord (Opus). Zainstalowany w systemie i automatycznie wykrywany.
 
 ## Dostępne Komendy (Slash Commands)
-* `/play [zapytanie]` - Wyszukuje utwór na YouTube Music / YouTube (lub przyjmuje bezpośredni link), dołącza do kanału i odtwarza utwór bądź dodaje go do kolejki.
+* `/play [zapytanie]` - Wyszukuje utwór na YouTube Music / YouTube, przyjmuje bezpośredni link lub link do całej playlisty (obsługa do 500 utworów w kolejce z mechanizmem Lazy Loading).
 * `/pause` - Wstrzymuje aktualnie odtwarzany utwór.
 * `/resume` - Wznawia wstrzymany utwór.
 * `/skip` - Pomija bieżący utwór i natychmiast odtwarza kolejny z kolejki.
 * `/stop` - Zatrzymuje odtwarzanie, czyści całą kolejkę serwera i odłącza bota od kanału głosowego.
-* `/queue` - Wyświetla listę oczekujących utworów w estetycznym oknie Discord Embed.
-* `/nowplaying` - Wyświetla tytuł obecnie granego utworu.
+* `/queue` - Wyświetla listę oczekujących utworów oraz stan zapełnienia kolejki (np. 42/500) w estetycznym oknie Discord Embed.
+* `/nowplaying` - Wyświetla tytuł i link obecnie granego utworu.
 
 ## Główne Cechy
+* **Obsługa całych Playlist i Lazy Loading:** Bot potrafi wczytać całe playlisty z YouTube/SoundCloud w 1-2 sekundy. Bezpośredni link strumieniowy wyciągany jest tuż przed startem utworu, dzięki czemu linki nigdy nie wygasają, a YouTube nie blokuje IP.
+* **Limit 500 utworów:** Zabezpieczenie chroniące przed niekontrolowanym rozrostem kolejki z informowaniem użytkownika o przekroczeniu limitu.
 * **Zarządzanie odtwarzaniem:** Pełen zestaw komend sterujących (`/play`, `/pause`, `/resume`, `/skip`, `/stop`, `/queue`, `/nowplaying`).
 * **Dynamiczny System Kolejkowania (Queue):** Każdy serwer otrzymuje własną niezależną kolejkę utworów w pamięci podręcznej.
 * **Integracja z kanałami głosowymi:** Mechanizm sprawdzania obecności użytkownika na kanale, automatyczne dołączanie i płynne przejścia.

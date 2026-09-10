@@ -8,11 +8,24 @@ from ytmusicapi import YTMusic
 
 logger = logging.getLogger('musicbot.music_cog')
 
-# Inicjalizacja ytmusicapi (do błyskawicznego odpytywania metadanych YTM)
+# Maksymalny limit utworów w kolejce per-serwer
+MAX_QUEUE_SIZE = 500
+
+# Inicjalizacja ytmusicapi (do błyskawicznego wyszukiwania w ekosystemie YouTube Music)
 ytmusic = YTMusic()
 
-# Zaawansowana konfiguracja yt-dlp z obsługą Node.js do rozwiązywania zabezpieczeń YouTube
-YTDL_OPTIONS = {
+# 1. Konfiguracja do błyskawicznego pobierania metadanych i całych playlist (Lazy Loading)
+YTDL_FLAT_OPTIONS = {
+    'extract_flat': True,
+    'quiet': True,
+    'no_warnings': True,
+    'default_search': 'auto',
+    'source_address': '0.0.0.0',
+    'js_runtimes': {'node': {}}
+}
+
+# 2. Konfiguracja do faktycznej ekstrakcji bezpośredniego strumienia audio przed samym odtworzeniem utworu
+YTDL_STREAM_OPTIONS = {
     'format': 'bestaudio/best',
     'extractaudio': True,
     'audioformat': 'mp3',
@@ -35,13 +48,14 @@ FFMPEG_OPTIONS = {
     'options': '-vn'
 }
 
-ytdl = yt_dlp.YoutubeDL(YTDL_OPTIONS)
+ytdl_flat = yt_dlp.YoutubeDL(YTDL_FLAT_OPTIONS)
+ytdl_stream = yt_dlp.YoutubeDL(YTDL_STREAM_OPTIONS)
 
 
 class Music(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.queues = {} # struktura: {guild_id: [dict, dict, ...]}
+        self.queues = {} # struktura: {guild_id: [{'title': str, 'webpage_url': str}, ...]}
         self.current_song = {} # struktura: {guild_id: dict}
 
     def get_queue(self, guild_id):
@@ -50,70 +64,114 @@ class Music(commands.Cog):
             self.queues[guild_id] = []
         return self.queues[guild_id]
 
-    async def search_song(self, query):
-        """Asynchroniczne wyszukiwanie z użyciem ytmusicapi (dla tekstu) oraz yt-dlp (dla odczytania samego linku)."""
-        logger.info(f"Rozpoczynam proces wyszukiwania dla zapytania: {query}")
+    async def get_stream_url(self, webpage_url):
+        """Wyciąga świeży bezpośredni link audio tuż przed startem odtwarzania (Lazy Loading)."""
+        loop = asyncio.get_event_loop()
         try:
-            loop = asyncio.get_event_loop()
-            
-            # Jeśli to jest link bezpośredni
-            if query.startswith('http://') or query.startswith('https://'):
-                data = await loop.run_in_executor(None, lambda: ytdl.extract_info(query, download=False))
-                if 'entries' in data and data['entries']:
-                    data = data['entries'][0]
-                stream_url = data.get('url')
-                if not stream_url and 'formats' in data:
-                    for f in reversed(data['formats']):
-                        if f.get('acodec') != 'none' and f.get('url'):
-                            stream_url = f['url']
-                            break
-                return {'url': stream_url, 'title': data.get('title', 'Nieznany tytuł z URL')}
-            
-            # Jeśli to tekst, próbujemy najpierw szybkiego API Youtube Music
-            top_result = None
-            try:
-                search_results = ytmusic.search(query, filter="songs")
-                if search_results:
-                    top_result = search_results[0]
-            except Exception as e:
-                logger.warning(f"Błąd wyszukiwania w ytmusicapi: {e}")
-
-            if top_result and 'videoId' in top_result:
-                video_id = top_result['videoId']
-                artist_name = top_result.get('artists', [{}])[0].get('name', '')
-                title = f"{artist_name} - {top_result['title']}" if artist_name else top_result['title']
-                yt_url = f"https://music.youtube.com/watch?v={video_id}"
-                logger.info(f"Znaleziono utwór na YTM: {title}. Rozpoczynam ekstrakcję przez yt-dlp...")
-                data = await loop.run_in_executor(None, lambda: ytdl.extract_info(yt_url, download=False))
-            else:
-                # Fallback do ogólnego wyszukiwania yt-dlp
-                logger.info(f"Brak w YTM, używam wyszukiwania ogólnego yt-dlp dla: {query}")
-                data = await loop.run_in_executor(None, lambda: ytdl.extract_info(f"ytsearch:{query}", download=False))
-                if 'entries' in data and data['entries']:
-                    data = data['entries'][0]
-                title = data.get('title', query)
-
+            data = await loop.run_in_executor(None, lambda: ytdl_stream.extract_info(webpage_url, download=False))
+            if 'entries' in data and data['entries']:
+                data = data['entries'][0]
             stream_url = data.get('url')
             if not stream_url and 'formats' in data:
                 for f in reversed(data['formats']):
                     if f.get('acodec') != 'none' and f.get('url'):
                         stream_url = f['url']
                         break
-
-            return {'url': stream_url, 'title': title}
-            
+            return stream_url
         except Exception as e:
-            logger.error(f"Błąd podczas wyszukiwania i parsowania utworu: {e}")
+            logger.error(f"Błąd ekstrakcji strumienia audio dla {webpage_url}: {e}")
             return None
 
+    async def search_items(self, query):
+        """
+        Wyszukuje pojedynczy utwór lub playlistę w trybie leniwym (Lazy Loading).
+        Zwraca: (is_playlist: bool, songs: list[dict], playlist_title: Optional[str])
+        """
+        loop = asyncio.get_event_loop()
+        logger.info(f"Rozpoczynam wyszukiwanie/ekstrakcję dla: {query}")
+        
+        # 1. Przypadek: Link bezpośredni (YouTube, YouTube Music, SoundCloud itp.)
+        if query.startswith(('http://', 'https://')):
+            try:
+                data = await loop.run_in_executor(None, lambda: ytdl_flat.extract_info(query, download=False))
+                
+                # Jeśli to playlista (posiada _type == 'playlist' lub listę wpisów > 1)
+                entries = data.get('entries')
+                if data.get('_type') == 'playlist' or (entries and len(entries) > 1):
+                    playlist_title = data.get('title', 'Playlista')
+                    songs = []
+                    for entry in entries:
+                        if not entry:
+                            continue
+                        song_title = entry.get('title') or 'Nieznany utwór'
+                        song_url = entry.get('url')
+                        if song_url and not song_url.startswith('http'):
+                            song_url = f"https://www.youtube.com/watch?v={song_url}"
+                        songs.append({
+                            'title': song_title,
+                            'webpage_url': song_url or query
+                        })
+                    logger.info(f"Znaleziono playlistę: '{playlist_title}' z {len(songs)} utworami.")
+                    return True, songs, playlist_title
+
+                # Jeśli to pojedynczy utwór z linku
+                if entries and len(entries) == 1:
+                    single = entries[0]
+                    song_title = single.get('title') or data.get('title') or 'Utwór z linku'
+                    song_url = single.get('url') or query
+                    if song_url and not song_url.startswith('http'):
+                        song_url = f"https://www.youtube.com/watch?v={song_url}"
+                else:
+                    song_title = data.get('title', 'Utwór z linku')
+                    song_url = query
+
+                return False, [{'title': song_title, 'webpage_url': song_url}], None
+
+            except Exception as e:
+                logger.error(f"Błąd ekstrakcji linku {query}: {e}")
+                return False, [], None
+
+        # 2. Przypadek: Wyszukiwanie tekstowe (próbujemy najpierw YouTube Music)
+        try:
+            search_results = ytmusic.search(query, filter="songs")
+            if search_results and 'videoId' in search_results[0]:
+                top_result = search_results[0]
+                video_id = top_result['videoId']
+                artist_name = top_result.get('artists', [{}])[0].get('name', '')
+                title = f"{artist_name} - {top_result['title']}" if artist_name else top_result['title']
+                yt_url = f"https://music.youtube.com/watch?v={video_id}"
+                return False, [{'title': title, 'webpage_url': yt_url}], None
+        except Exception as e:
+            logger.warning(f"Błąd wyszukiwania w ytmusicapi: {e}")
+
+        # Fallback do ogólnego wyszukiwania yt-dlp
+        try:
+            data = await loop.run_in_executor(None, lambda: ytdl_flat.extract_info(f"ytsearch:{query}", download=False))
+            if 'entries' in data and data['entries']:
+                entry = data['entries'][0]
+                title = entry.get('title', query)
+                song_url = entry.get('url')
+                if song_url and not song_url.startswith('http'):
+                    song_url = f"https://www.youtube.com/watch?v={song_url}"
+                return False, [{'title': title, 'webpage_url': song_url or query}], None
+        except Exception as e:
+            logger.error(f"Błąd fallbacku ytsearch: {e}")
+
+        return False, [], None
+
     def play_next(self, interaction: discord.Interaction):
-        """Odtwarza następny utwór w kolejce."""
+        """Synchroniczny punkt wywołania z callbacku after; zleca asynchroniczne odtworzenie."""
+        coro = self._play_next_async(interaction)
+        asyncio.run_coroutine_threadsafe(coro, self.bot.loop)
+
+    async def _play_next_async(self, interaction: discord.Interaction):
+        """Asynchroniczne pobranie świeżego linku audio i odtworzenie kolejnego utworu (Lazy Loading)."""
         guild_id = interaction.guild.id
         queue = self.get_queue(guild_id)
         voice_client = interaction.guild.voice_client
 
-        if not voice_client:
-            logger.warning(f"Zażądano play_next, ale brak VoiceClienta na serwerze {guild_id}")
+        if not voice_client or not voice_client.is_connected():
+            logger.warning(f"Zażądano _play_next_async, ale brak VoiceClienta na serwerze {guild_id}")
             return
 
         if not queue:
@@ -121,35 +179,45 @@ class Music(commands.Cog):
             logger.info(f"Kolejka odtwarzania na serwerze {guild_id} dobiegła końca.")
             return
 
-        # Zdejmij pierwszy element
+        # Pobieramy kolejny utwór z kolejki
         song = queue.pop(0)
         self.current_song[guild_id] = song
-        
+
+        # LAZY LOADING: Dopiero teraz pobieramy świeży bezpośredni link audio
+        stream_url = await self.get_stream_url(song['webpage_url'])
+        if not stream_url:
+            logger.warning(f"Nie udało się wyciągnąć strumienia dla '{song['title']}', pomijam...")
+            try:
+                await interaction.channel.send(f"⚠️ Nie udało się pobrać strumienia dla: **{song['title']}**, pomijam...")
+            except Exception:
+                pass
+            self.play_next(interaction)
+            return
+
         try:
             logger.info(f"Rozpoczynam odtwarzanie utworu: {song['title']} (Serwer: {guild_id})")
-            source = discord.FFmpegPCMAudio(song['url'], **FFMPEG_OPTIONS)
-            
+            source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS)
+
             def after_playing(error):
                 if error:
                     logger.error(f"Błąd FFmpeg podczas odtwarzania utworu: {error}")
                 self.play_next(interaction)
 
             voice_client.play(source, after=after_playing)
-            
-            # Powiadomienie na czacie - ponieważ to lambda (sync), trzeba to wywołać w wątku asynchronicznym pętli bota
-            coro = interaction.channel.send(f"🎶 Teraz odtwarzam: **{song['title']}**")
-            asyncio.run_coroutine_threadsafe(coro, self.bot.loop)
-            
+
+            try:
+                await interaction.channel.send(f"🎶 Teraz odtwarzam: **{song['title']}**")
+            except Exception as e:
+                logger.warning(f"Błąd wysyłania komunikatu 'Teraz odtwarzam': {e}")
+
         except Exception as e:
-            logger.error(f"Wystąpił błąd w FFmpeg podczas odtwarzania na serwerze {guild_id}: {e}")
-            # Przejdź do kolejnego w przypadku crasha tego pliku
+            logger.error(f"Wystąpił błąd w FFmpeg podczas startu odtwarzania na serwerze {guild_id}: {e}")
             self.play_next(interaction)
 
-
-    @app_commands.command(name="play", description="Wyszukaj i odtwórz utwór muzyczny (wspiera nazwy i linki)")
+    @app_commands.command(name="play", description="Wyszukaj utwór lub dodaj playlistę (do 500 utworów w kolejce)")
     async def play(self, interaction: discord.Interaction, zapytanie: str):
-        logger.info(f"Użytkownik {interaction.user} (G:{interaction.guild.id}) rząda /play [{zapytanie}]")
-        
+        logger.info(f"Użytkownik {interaction.user} (G:{interaction.guild.id}) żąda /play [{zapytanie}]")
+
         if not interaction.user.voice:
             await interaction.response.send_message("❌ Musisz dołączyć do kanału głosowego!", ephemeral=True)
             return
@@ -162,25 +230,53 @@ class Music(commands.Cog):
             voice_client = interaction.guild.voice_client
             logger.info(f"Dołączono do kanału {voice_channel.name} (G:{interaction.guild.id})")
 
-        # Utrzymuje interakcję przez dłuższy czas (wyszukiwanie yt-dlp bywa wolne, domyślnie Discord daje na to tylko 3s)
-        await interaction.response.defer()
+        queue = self.get_queue(interaction.guild.id)
 
-        song = await self.search_song(zapytanie)
-        if not song:
-            logger.error(f"Nie udało się odnaleźć muzyki dla zapytania '{zapytanie}' (G:{interaction.guild.id})")
-            await interaction.followup.send("❌ Nie znaleziono utworu lub wystąpił błąd przy pobieraniu strumienia.")
+        # 1. Weryfikacja twardego limitu 500 utworów
+        if len(queue) >= MAX_QUEUE_SIZE:
+            await interaction.response.send_message(
+                f"❌ **Przekroczono limit kolejki!** W kolejce znajduje się już maksymalna dopuszczalna liczba utworów ({MAX_QUEUE_SIZE}). Poczekaj, aż część utworów zostanie odtworzona.",
+                ephemeral=True
+            )
             return
 
-        queue = self.get_queue(interaction.guild.id)
-        queue.append(song)
-        logger.info(f"Pomyślnie dodano do kolejki utwór: {song['title']} na serwerze (G:{interaction.guild.id})")
-        
-        # Jeśli nic w tej chwili nie gra, po prostu zacznij odtwarzać to co przed chwilą dodaliśmy do kolejki
-        if not voice_client.is_playing() and not voice_client.is_paused():
-            await interaction.followup.send(f"🎵 Znaleziono i ładuję: **{song['title']}**...")
-            self.play_next(interaction)
+        await interaction.response.defer()
+
+        is_playlist, songs, playlist_title = await self.search_items(zapytanie)
+        if not songs:
+            logger.error(f"Nie udało się odnaleźć muzyki dla zapytania '{zapytanie}' (G:{interaction.guild.id})")
+            await interaction.followup.send("❌ Nie znaleziono utworu/playlisty lub wystąpił błąd przy pobieraniu.")
+            return
+
+        # Sprawdzenie ile wolnych miejsc pozostało w kolejce
+        current_len = len(queue)
+        available_slots = MAX_QUEUE_SIZE - current_len
+
+        if is_playlist:
+            total_playlist_songs = len(songs)
+            if total_playlist_songs > available_slots:
+                songs_to_add = songs[:available_slots]
+                queue.extend(songs_to_add)
+                await interaction.followup.send(
+                    f"⚠️ **Dodano {len(songs_to_add)} utworów z playlisty '{playlist_title}'!**\n"
+                    f"Osiągnięto limit **{MAX_QUEUE_SIZE}** utworów w kolejce (pominięto {total_playlist_songs - available_slots} nadmiarowych utworów)."
+                )
+            else:
+                queue.extend(songs)
+                await interaction.followup.send(
+                    f"📑 **Dodano playlistę:** `{playlist_title}` ({len(songs)} utworów) do kolejki! 🎶 (Łącznie w kolejce: {len(queue)}/{MAX_QUEUE_SIZE})"
+                )
         else:
-            await interaction.followup.send(f"➕ Dodano do kolejki: **{song['title']}**")
+            song = songs[0]
+            queue.append(song)
+            if not voice_client.is_playing() and not voice_client.is_paused():
+                await interaction.followup.send(f"🎵 Znaleziono i ładuję: **{song['title']}**...")
+            else:
+                await interaction.followup.send(f"➕ Dodano do kolejki: **{song['title']}** (Pozycja: {len(queue)}/{MAX_QUEUE_SIZE})")
+
+        # Jeśli aktualnie nic nie gra, odpalamy pierwszy utwór z kolejki
+        if not voice_client.is_playing() and not voice_client.is_paused():
+            self.play_next(interaction)
 
     @app_commands.command(name="stop", description="Zatrzymuje muzykę, czyści kolejkę i bot opuszcza kanał")
     async def stop(self, interaction: discord.Interaction):
@@ -202,14 +298,13 @@ class Music(commands.Cog):
         logger.info(f"Wywołano /skip przez {interaction.user} (G:{interaction.guild.id})")
         voice_client = interaction.guild.voice_client
         
-        if voice_client and voice_client.is_playing():
-            # Zatrzymanie voice clienta automatycznie triggeruje callback `after=self.play_next`
+        if voice_client and (voice_client.is_playing() or voice_client.is_paused()):
             voice_client.stop()
             await interaction.response.send_message("⏭️ Pomyślnie pominięto utwór.")
         else:
             await interaction.response.send_message("Obecnie nie odtwarzam żadnego utworu.", ephemeral=True)
 
-    @app_commands.command(name="queue", description="Pokazuje aktualną kolejkę nadchodzących utworów")
+    @app_commands.command(name="queue", description="Pokazuje aktualną kolejkę nadchodzących utworów (do 500)")
     async def queue(self, interaction: discord.Interaction):
         logger.info(f"Wywołano /queue przez {interaction.user} (G:{interaction.guild.id})")
         queue = self.get_queue(interaction.guild.id)
@@ -218,17 +313,19 @@ class Music(commands.Cog):
             await interaction.response.send_message("📜 Kolejka jest w tej chwili całkowicie pusta.")
             return
         
-        embed = discord.Embed(title="Kolejka Odtwarzania", color=discord.Color.dark_purple())
+        total = len(queue)
+        embed = discord.Embed(
+            title=f"Kolejka Odtwarzania ({total}/{MAX_QUEUE_SIZE})",
+            color=discord.Color.dark_purple()
+        )
         
-        # Wyświetlamy max. 10 elementów aby nie złamać limitów znakowych Discorda
         for i, song in enumerate(queue[:10]):
             embed.add_field(name=f"{i+1}. {song['title']}", value="⏳ Oczekuje w kolejce", inline=False)
             
-        if len(queue) > 10:
-            embed.set_footer(text=f"I {len(queue) - 10} innych piosenek na liście...")
+        if total > 10:
+            embed.set_footer(text=f"I {total - 10} innych utworów na liście...")
             
         await interaction.response.send_message(embed=embed)
-
 
     @app_commands.command(name="pause", description="Wstrzymuje odtwarzanie aktualnego utworu")
     async def pause(self, interaction: discord.Interaction):
@@ -255,7 +352,13 @@ class Music(commands.Cog):
         logger.info(f"Wywołano /nowplaying przez {interaction.user} (G:{interaction.guild.id})")
         song = self.current_song.get(interaction.guild.id)
         if song:
-            embed = discord.Embed(title="Aktualnie odtwarzany utwór", description=f"🎶 **{song['title']}**", color=discord.Color.green())
+            embed = discord.Embed(
+                title="Aktualnie odtwarzany utwór",
+                description=f"🎶 **{song['title']}**",
+                color=discord.Color.green()
+            )
+            if song.get('webpage_url'):
+                embed.add_field(name="Link", value=song['webpage_url'], inline=False)
             await interaction.response.send_message(embed=embed)
         else:
             await interaction.response.send_message("W tej chwili nic nie jest odtwarzane.", ephemeral=True)
