@@ -34,9 +34,14 @@ Choć nie jest to biblioteka Pythona, lecz samodzielne narzędzie systemowe, jes
 * `/pause` - Wstrzymuje aktualnie odtwarzany utwór.
 * `/resume` - Wznawia wstrzymany utwór.
 * `/skip` - Pomija bieżący utwór i natychmiast odtwarza kolejny z kolejki.
+* `/skipto [pozycja]` - Przeskakuje bezpośrednio do wskazanego utworu w kolejce (od 1 do N).
+* `/playnext [pozycja]` - Ustawia wybrany utwór z kolejki na pierwsze miejsce (zagra jako następny).
+* `/repeat` - Włącza lub wyłącza powtarzanie (zapętlenie) całej kolejki utworów.
+* `/shuffle` - Przelosowuje kolejność wszystkich utworów w kolejce.
 * `/stop` - Zatrzymuje odtwarzanie, czyści całą kolejkę serwera i odłącza bota od kanału głosowego.
 * `/queue` - Wyświetla listę oczekujących utworów oraz stan zapełnienia kolejki (np. 42/500) w estetycznym oknie Discord Embed.
 * `/nowplaying` - Wyświetla tytuł i link obecnie granego utworu.
+* `/setchannel [kanał]` - Ogranicza komendy bota do wybranego kanału tekstowego (lub usuwa ograniczenie).
 
 ## Główne Cechy
 * **Obsługa całych Playlist i Lazy Loading:** Bot potrafi wczytać całe playlisty z YouTube/SoundCloud w 1-2 sekundy. Bezpośredni link strumieniowy wyciągany jest tuż przed startem utworu, dzięki czemu linki nigdy nie wygasają, a YouTube nie blokuje IP.

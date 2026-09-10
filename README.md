@@ -33,9 +33,14 @@ Zaawansowany, ultralekki i w pełni asynchroniczny bot muzyczny dla platformy **
 | `/pause` | *brak* | Wstrzymuje odtwarzanie aktualnego utworu |
 | `/resume` | *brak* | Wznawia wstrzymane odtwarzanie |
 | `/skip` | *brak* | Pomija bieżący utwór i natychmiast przechodzi do kolejnego z kolejki |
+| `/skipto` | `pozycja` *(liczba od 1)* | Przeskakuje bezpośrednio do wybranego numeru w kolejce |
+| `/playnext` | `pozycja` *(liczba od 1)* | Przenosi wybrany utwór z kolejki na pierwsze miejsce (zagra jako następny) |
+| `/repeat` | *brak* | Włącza lub wyłącza powtarzanie (zapętlenie) całej kolejki utworów |
+| `/shuffle` | *brak* | Przelosowuje kolejność wszystkich utworów w kolejce |
 | `/stop` | *brak* | Zatrzymuje muzykę, czyści całą kolejkę serwera i odłącza bota od kanału głosowego |
-| `/queue` | *brak* | Wyświetla listę oczekujących utworów w estetycznym oknie Discord Embed |
-| `/nowplaying` | *brak* | Wyświetla szczegóły aktualnie odtwarzanego utworu |
+| `/queue` | *brak* | Wyświetla listę oczekujących utworów oraz stan zapełnienia (do 500) w Discord Embed |
+| `/nowplaying` | *brak* | Wyświetla szczegóły i link aktualnie odtwarzanego utworu |
+| `/setchannel` | `kanal` *(opcjonalnie)* | Ogranicza komendy bota do wybranego kanału tekstowego (lub usuwa ograniczenie) |
 
 ---
 
