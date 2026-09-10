@@ -1,0 +1,18 @@
+FROM python:3.11-slim
+
+# Instalacja ffmpeg, który jest niezbędny do przetwarzania audio
+RUN apt-get update && \
+    apt-get install -y ffmpeg && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Najpierw kopiujemy requirements i instalujemy je by wykorzystać cache dockera
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Kopiowanie reszty plików bota
+COPY . .
+
+# Uruchomienie aplikacji
+CMD [\"python\", \"main.py\"]

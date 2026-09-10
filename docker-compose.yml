@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  bot-muzyczny:
+    build: .
+    container_name: discord_music_bot
+    restart: unless-stopped
+    volumes:
+      # Mapowanie pliku .env by można było łatwo zmienić token na produkcji bez przebudowy
+      - ./.env:/app/.env
+      # Logi również wyciągamy na zewnątrz by były łatwo dostępne
+      - ./bot.log:/app/bot.log

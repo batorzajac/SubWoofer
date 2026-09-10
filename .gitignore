@@ -1,0 +1,33 @@
+# Pliki środowiskowe i sekretne klucze
+.env
+.env.local
+
+# Logi
+*.log
+bot.log
+
+# Środowisko wirtualne Pythona
+venv/
+ENV/
+env/
+.venv/
+
+# Cache i kompilacja Pythona
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Pliki środowisk programistycznych i edytorów
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Pliki binarne FFmpeg
+ffmpeg.exe
+ffplay.exe
+ffprobe.exe

@@ -1,0 +1,6 @@
+discord.py
+yt-dlp
+ytmusicapi
+PyNaCl
+python-dotenv
+davey
