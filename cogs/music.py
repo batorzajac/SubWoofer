@@ -47,7 +47,6 @@ YTDL_STREAM_OPTIONS = {
     'default_search': 'auto',
     'source_address': '0.0.0.0'
 }
-
 if YTDL_PROXY:
     YTDL_FLAT_OPTIONS['proxy'] = YTDL_PROXY
     YTDL_STREAM_OPTIONS['proxy'] = YTDL_PROXY
@@ -57,8 +56,12 @@ if os.path.exists(COOKIE_FILE):
     YTDL_STREAM_OPTIONS['cookiefile'] = COOKIE_FILE
 
 # Parametry optymalizujące przerywanie dźwięku w FFmpeg
+ffmpeg_before = '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5'
+if YTDL_PROXY and YTDL_PROXY.startswith("http"):
+    ffmpeg_before = f'-http_proxy {YTDL_PROXY} ' + ffmpeg_before
+
 FFMPEG_OPTIONS = {
-    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+    'before_options': ffmpeg_before,
     'options': '-vn'
 }
 

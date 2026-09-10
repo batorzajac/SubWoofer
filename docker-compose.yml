@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     network_mode: host
     environment:
-      - YTDL_PROXY=socks5://127.0.0.1:40000
+      - YTDL_PROXY=http://127.0.0.1:8118
     volumes:
       # Mapowanie pliku .env by można było łatwo zmienić token na produkcji bez przebudowy
       - ./.env:/app/.env
