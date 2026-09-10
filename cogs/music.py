@@ -18,14 +18,17 @@ MAX_QUEUE_SIZE = 500
 # Inicjalizacja ytmusicapi (do błyskawicznego wyszukiwania w ekosystemie YouTube Music)
 ytmusic = YTMusic()
 
+# Opcjonalne proxy (np. lokalne SOCKS5 Cloudflare WARP na VPS) i plik cookies
+YTDL_PROXY = os.getenv("YTDL_PROXY")
+COOKIE_FILE = os.getenv("COOKIE_FILE", "cookies.txt")
+
 # 1. Konfiguracja do błyskawicznego pobierania metadanych i całych playlist (Lazy Loading)
 YTDL_FLAT_OPTIONS = {
     'extract_flat': True,
     'quiet': True,
     'no_warnings': True,
     'default_search': 'auto',
-    'source_address': '0.0.0.0',
-    'js_runtimes': {'node': {}}
+    'source_address': '0.0.0.0'
 }
 
 # 2. Konfiguracja do faktycznej ekstrakcji bezpośredniego strumienia audio przed samym odtworzeniem utworu
@@ -42,9 +45,16 @@ YTDL_STREAM_OPTIONS = {
     'quiet': True,
     'no_warnings': True,
     'default_search': 'auto',
-    'source_address': '0.0.0.0',
-    'js_runtimes': {'node': {}}
+    'source_address': '0.0.0.0'
 }
+
+if YTDL_PROXY:
+    YTDL_FLAT_OPTIONS['proxy'] = YTDL_PROXY
+    YTDL_STREAM_OPTIONS['proxy'] = YTDL_PROXY
+
+if os.path.exists(COOKIE_FILE):
+    YTDL_FLAT_OPTIONS['cookiefile'] = COOKIE_FILE
+    YTDL_STREAM_OPTIONS['cookiefile'] = COOKIE_FILE
 
 # Parametry optymalizujące przerywanie dźwięku w FFmpeg
 FFMPEG_OPTIONS = {

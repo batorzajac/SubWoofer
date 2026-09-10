@@ -1,8 +1,13 @@
 FROM python:3.11-slim
 
-# Instalacja ffmpeg oraz nodejs (niezbędnych do przetwarzania audio i rozwiązywania skryptów YouTube)
+# Instalacja ffmpeg, nodejs oraz deno (niezbędnych do przetwarzania audio i wyzwań JS YouTube)
 RUN apt-get update && \
-    apt-get install -y ffmpeg nodejs && \
+    apt-get install -y ffmpeg nodejs curl unzip && \
+    curl -fsSL https://deno.land/install.sh | sh && \
+    mv /root/.deno/bin/deno /usr/local/bin/deno && \
+    rm -rf /root/.deno && \
+    apt-get purge -y curl unzip && \
+    apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
