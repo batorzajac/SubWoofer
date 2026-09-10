@@ -74,6 +74,7 @@ class QueuePaginationView(discord.ui.View):
         self.prev_btn.disabled = (self.page <= 0)
         self.next_btn.disabled = (self.page >= total_pages - 1)
         self.page_indicator.label = f"{self.page + 1}/{total_pages}"
+        self.shuffle_btn.disabled = (len(queue) < 2)
 
     def build_embed(self) -> discord.Embed:
         queue = self.cog.get_queue(self.guild_id)
@@ -99,7 +100,7 @@ class QueuePaginationView(discord.ui.View):
         embed.set_footer(text=f"Strona {self.page + 1} z {total_pages} • Pozycje {start_idx + 1}-{min(end_idx, total)} z {total}")
         return embed
 
-    @discord.ui.button(emoji="◀️", label="Poprzednia", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(emoji="◀️", style=discord.ButtonStyle.secondary)
     async def prev_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         queue = self.cog.get_queue(self.guild_id)
         total_pages = max(1, (len(queue) + 9) // 10)
@@ -112,7 +113,7 @@ class QueuePaginationView(discord.ui.View):
     async def page_indicator(self, interaction: discord.Interaction, button: discord.ui.Button):
         pass
 
-    @discord.ui.button(emoji="▶️", label="Następna", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(emoji="▶️", style=discord.ButtonStyle.secondary)
     async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         queue = self.cog.get_queue(self.guild_id)
         total_pages = max(1, (len(queue) + 9) // 10)
@@ -122,6 +123,16 @@ class QueuePaginationView(discord.ui.View):
             self.page = max(0, total_pages - 1)
         self.update_buttons()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    @discord.ui.button(emoji="🔀", style=discord.ButtonStyle.secondary)
+    async def shuffle_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        queue = self.cog.get_queue(self.guild_id)
+        if len(queue) >= 2:
+            random.shuffle(queue)
+            logger.info(f"Przelosowano kolejkę z poziomu widoku /queue na serwerze {self.guild_id}")
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+        await self.cog.update_dashboard(self.guild_id)
 
     async def on_timeout(self):
         pass
