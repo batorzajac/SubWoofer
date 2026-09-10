@@ -16,7 +16,7 @@ Twój bot jest już online i sam wznowi pracę po ewentualnym crashu lub ponowny
 ## Opcja 2: Usługa Systemd (Klasycznie - bez Dockera)
 Jeśli wolisz zainstalować pakiety klasycznie i stworzyć proces systemowy w systemie operacyjnym:
 
-1. Przenieś folder z botem do np. `/opt/bot-muzyczny` na serwerze.
+1. Przenieś folder z botem do np. `/opt/subwoofer` na serwerze.
 2. Zainstaluj FFmpeg i Pythona:
    ```bash
    sudo apt update
@@ -24,17 +24,17 @@ Jeśli wolisz zainstalować pakiety klasycznie i stworzyć proces systemowy w sy
    ```
 3. Utwórz wirtualne środowisko (venv) i zainstaluj zależności w folderze z botem:
    ```bash
-   cd /opt/bot-muzyczny
+   cd /opt/subwoofer
    python3 -m venv venv
    ./venv/bin/pip install -r requirements.txt
    ```
 4. Przekopiuj przygotowany plik usługi do procesów systemowych:
    ```bash
-   sudo cp deploy/bot-muzyczny.service /etc/systemd/system/
+   sudo cp deploy/subwoofer.service /etc/systemd/system/
    ```
 5. Aktywuj i uruchom bota!
    ```bash
    sudo systemctl daemon-reload
-   sudo systemctl enable bot-muzyczny
-   sudo systemctl start bot-muzyczny
+   sudo systemctl enable subwoofer
+   sudo systemctl start subwoofer
    ```

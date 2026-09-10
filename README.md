@@ -1,11 +1,11 @@
-# Discord Music Bot (Black Sabbath) 🎵⚡
+# SubWoofer - Muzyczny Bot na Discorda 🐶🔊
 
 Zaawansowany, ultralekki i w pełni asynchroniczny bot muzyczny dla platformy **Discord**, napisany w języku **Python 3.10+** z wykorzystaniem **discord.py**, **yt-dlp** oraz **ytmusicapi**. Obsługuje odtwarzanie dźwięku w wysokiej jakości, nowoczesne komendy ukośnikowe (Slash Commands), zaawansowane kolejkowanie per-serwer oraz omijanie restrykcji wiekowych bez konieczności logowania kontem YouTube.
 
 ---
 
 > 🔗 **Szybkie dodanie bota na serwer Discord:**  
-> **[Kliknij tutaj, aby zaprosić bota Black Sabbath](https://discord.com/oauth2/authorize?client_id=1539396744234934355&permissions=8&scope=bot+applications.commands)**  
+> **[Kliknij tutaj, aby zaprosić bota SubWoofer](https://discord.com/oauth2/authorize?client_id=1539396744234934355&permissions=8&scope=bot+applications.commands)**  
 > *(Wymagane uprawnienia administratora lub zarządzania serwerem)*
 
 ---
@@ -80,8 +80,8 @@ bot muzyczny/
 
 ### 1. Klonowanie i przygotowanie środowiska
 ```bash
-git clone https://github.com/batorzajac/discord-music-bot.git
-cd discord-music-bot
+git clone https://github.com/batorzajac/SubWoofer.git
+cd SubWoofer
 python -m venv venv
 ```
 
