@@ -980,21 +980,35 @@ class Music(commands.Cog):
 
         await interaction.response.defer(ephemeral=True)
         loop = asyncio.get_event_loop()
+        raw_entries = []
         try:
-            data = await loop.run_in_executor(None, lambda: ytdl_flat.extract_info(f"ytsearch5:{query}", download=False))
-            entries = data.get('entries', []) if data else []
+            data = await loop.run_in_executor(None, lambda: ytdl_flat.extract_info(f"ytsearch15:{query}", download=False))
+            raw_entries = data.get('entries', []) if data else []
         except Exception as e:
             logger.error(f"Błąd w /search dla '{query}': {e}")
-            entries = []
+            raw_entries = []
 
-        if not entries:
-            await interaction.followup.send(f"❌ Nie znaleziono wyników dla zapytania `{query}`.", ephemeral=True)
-            return
+        # Filtrujemy wyniki, aby pominąć kanały i playlisty (szukamy wyłącznie pojedynczych filmów i utworów muzycznych)
+        entries = []
+        for e in raw_entries:
+            if not e:
+                continue
+            # Odrzucamy playlisty i kanały
+            if e.get('_type') in ('playlist', 'multi_video'):
+                continue
+            if e.get('ie_key') not in ('Youtube', None):
+                continue
+            item_id = str(e.get('id', ''))
+            if item_id.startswith(('UC', 'PL')):
+                continue
+            if e.get('duration') is None:
+                continue
+            entries.append(e)
+            if len(entries) >= 5:
+                break
 
         tracks = []
         for e in entries:
-            if not e:
-                continue
             title = e.get('title', 'Nieznany utwór')
             url = e.get('url') or e.get('webpage_url')
             if url and not url.startswith('http'):
@@ -1007,6 +1021,32 @@ class Music(commands.Cog):
                 dur_str = "N/A"
             uploader = e.get('uploader') or e.get('channel') or "YouTube"
             tracks.append({'title': title, 'url': url or f"ytsearch1:{query}", 'duration': dur_str, 'uploader': uploader})
+
+        # Fallback do YouTube Music (utwory), jeśli yt-dlp nie zwrócił żadnych pojedynczych filmów
+        if not tracks:
+            try:
+                music_results = ytmusic.search(query, filter="songs")
+                for r in music_results[:5]:
+                    if not r or 'videoId' not in r:
+                        continue
+                    v_id = r['videoId']
+                    v_title = r.get('title', 'Nieznany utwór')
+                    artists_list = r.get('artists', [{}])
+                    artist_str = artists_list[0].get('name', '') if artists_list else ''
+                    full_t = f"{artist_str} - {v_title}" if artist_str else v_title
+                    dur_str = r.get('duration', 'N/A')
+                    tracks.append({
+                        'title': full_t,
+                        'url': f"https://music.youtube.com/watch?v={v_id}",
+                        'duration': dur_str,
+                        'uploader': artist_str or "YouTube Music"
+                    })
+            except Exception as e:
+                logger.warning(f"Błąd fallbacku ytmusic w /search: {e}")
+
+        if not tracks:
+            await interaction.followup.send(f"❌ Nie znaleziono filmów ani utworów dla zapytania `{query}`.", ephemeral=True)
+            return
 
         view = SearchView(self, interaction.guild.id, tracks)
         await interaction.followup.send(f"🔍 **Wyniki wyszukiwania dla:** `{query}`\nWybierz utwór z listy poniżej:", view=view, ephemeral=True)
