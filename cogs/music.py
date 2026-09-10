@@ -59,6 +59,74 @@ ytdl_stream = yt_dlp.YoutubeDL(YTDL_STREAM_OPTIONS)
 STATE_FILE = "bot_state.json"
 
 
+class QueuePaginationView(discord.ui.View):
+    """Widok paginacji kolejki z przyciskami przełączania stron (po 10 utworów)."""
+    def __init__(self, cog, guild_id: int, page: int = 0):
+        super().__init__(timeout=180)
+        self.cog = cog
+        self.guild_id = guild_id
+        self.page = page
+        self.update_buttons()
+
+    def update_buttons(self):
+        queue = self.cog.get_queue(self.guild_id)
+        total_pages = max(1, (len(queue) + 9) // 10)
+        self.prev_btn.disabled = (self.page <= 0)
+        self.next_btn.disabled = (self.page >= total_pages - 1)
+        self.page_indicator.label = f"{self.page + 1}/{total_pages}"
+
+    def build_embed(self) -> discord.Embed:
+        queue = self.cog.get_queue(self.guild_id)
+        total = len(queue)
+        total_pages = max(1, (total + 9) // 10)
+        repeat_tag = " [🔁 Repeat]" if self.cog.repeat_mode.get(self.guild_id, False) else ""
+
+        embed = discord.Embed(
+            title=f"📜 Kolejka Odtwarzania ({total}/{MAX_QUEUE_SIZE}){repeat_tag}",
+            color=discord.Color.dark_purple()
+        )
+
+        start_idx = self.page * 10
+        end_idx = start_idx + 10
+        page_songs = queue[start_idx:end_idx]
+
+        if not page_songs:
+            embed.description = "*Kolejka jest pusta.*"
+        else:
+            lines = [f"{i}. {song['title']}" for i, song in enumerate(page_songs, start=start_idx + 1)]
+            embed.description = "\n".join(lines)
+
+        embed.set_footer(text=f"Strona {self.page + 1} z {total_pages} • Pozycje {start_idx + 1}-{min(end_idx, total)} z {total}")
+        return embed
+
+    @discord.ui.button(emoji="◀️", label="Poprzednia", style=discord.ButtonStyle.secondary)
+    async def prev_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        queue = self.cog.get_queue(self.guild_id)
+        total_pages = max(1, (len(queue) + 9) // 10)
+        if self.page > 0:
+            self.page = min(self.page - 1, total_pages - 1)
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    @discord.ui.button(label="1/1", style=discord.ButtonStyle.primary, disabled=True)
+    async def page_indicator(self, interaction: discord.Interaction, button: discord.ui.Button):
+        pass
+
+    @discord.ui.button(emoji="▶️", label="Następna", style=discord.ButtonStyle.secondary)
+    async def next_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        queue = self.cog.get_queue(self.guild_id)
+        total_pages = max(1, (len(queue) + 9) // 10)
+        if self.page < total_pages - 1:
+            self.page += 1
+        else:
+            self.page = max(0, total_pages - 1)
+        self.update_buttons()
+        await interaction.response.edit_message(embed=self.build_embed(), view=self)
+
+    async def on_timeout(self):
+        pass
+
+
 class MusicDashboardView(discord.ui.View):
     """Interaktywny panel przycisków sterujących dashboardem (Persistent View)."""
     def __init__(self, cog=None, guild_id: Optional[int] = None):
@@ -154,14 +222,12 @@ class MusicDashboardView(discord.ui.View):
             return
         queue = cog.get_queue(guild_id)
         if not queue:
-            await interaction.response.send_message("📜 Kolejka jest w tej chwili całkowicie pusta.", ephemeral=True)
+            repeat_status = " (🔁 Repeat: WŁĄCZONE)" if cog.repeat_mode.get(guild_id, False) else ""
+            await interaction.response.send_message(f"📜 Kolejka jest w tej chwili całkowicie pusta.{repeat_status}", ephemeral=True)
             return
-        embed = discord.Embed(title=f"Kolejka Odtwarzania ({len(queue)}/{MAX_QUEUE_SIZE})", color=discord.Color.dark_purple())
-        for i, s in enumerate(queue[:10]):
-            embed.add_field(name=f"{i+1}. {s['title']}", value="⏳ W kolejce", inline=False)
-        if len(queue) > 10:
-            embed.set_footer(text=f"I {len(queue) - 10} innych utworów...")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        view = QueuePaginationView(cog, guild_id, page=0)
+        embed = view.build_embed()
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     @discord.ui.button(emoji="🔄", label="Odśwież", style=discord.ButtonStyle.secondary, custom_id="sb_refresh", row=1)
     async def refresh_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -704,20 +770,9 @@ class Music(commands.Cog):
             await interaction.response.send_message(f"📜 Kolejka jest w tej chwili całkowicie pusta.{repeat_status}", ephemeral=True)
             return
         
-        total = len(queue)
-        repeat_tag = " [🔁 Repeat]" if self.repeat_mode.get(interaction.guild.id, False) else ""
-        embed = discord.Embed(
-            title=f"Kolejka Odtwarzania ({total}/{MAX_QUEUE_SIZE}){repeat_tag}",
-            color=discord.Color.dark_purple()
-        )
-        
-        for i, song in enumerate(queue[:10]):
-            embed.add_field(name=f"{i+1}. {song['title']}", value="⏳ Oczekuje w kolejce", inline=False)
-            
-        if total > 10:
-            embed.set_footer(text=f"I {total - 10} innych utworów na liście...")
-            
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        view = QueuePaginationView(self, interaction.guild.id, page=0)
+        embed = view.build_embed()
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
     @app_commands.command(name="pause", description="Wstrzymuje odtwarzanie aktualnego utworu")
     async def pause(self, interaction: discord.Interaction):
