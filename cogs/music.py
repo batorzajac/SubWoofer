@@ -11,7 +11,7 @@ logger = logging.getLogger('musicbot.music_cog')
 # Inicjalizacja ytmusicapi (do błyskawicznego odpytywania metadanych YTM)
 ytmusic = YTMusic()
 
-# Zaawansowana konfiguracja yt-dlp pomagająca ominąć blokady wiekowe YouTube bez logowania (spoofing jako TV/Android)
+# Zaawansowana konfiguracja yt-dlp z obsługą Node.js do rozwiązywania zabezpieczeń YouTube
 YTDL_OPTIONS = {
     'format': 'bestaudio/best',
     'extractaudio': True,
@@ -26,12 +26,7 @@ YTDL_OPTIONS = {
     'no_warnings': True,
     'default_search': 'auto',
     'source_address': '0.0.0.0',
-    # Krytyczne do ominięcia 18+ : Spoofing
-    'extractor_args': {
-        'youtube': {
-            'client': ['android', 'web']
-        }
-    }
+    'js_runtimes': {'node': {}}
 }
 
 # Parametry optymalizujące przerywanie dźwięku w FFmpeg
