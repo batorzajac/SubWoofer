@@ -12,6 +12,8 @@ import re
 import time
 import platform
 import aiohttp
+import queue
+import threading
 from typing import Optional
 from ytmusicapi import YTMusic
 
@@ -77,19 +79,65 @@ ytdl_stream = yt_dlp.YoutubeDL(YTDL_STREAM_OPTIONS)
 STATE_FILE = "bot_state.json"
 
 
-class YTDLStreamAudioSource(discord.AudioSource):
+class BufferedAudioSource(discord.AudioSource):
     """
-    Strumieniowe źródło audio łączące wyjście procesu yt-dlp (stdout) z wejściem FFmpegPCMAudio.
-    Zapewnia natychmiastowe rozpoczęcie odtwarzania, omijanie throttlingu YouTube CDN
-    oraz pewne i bezpieczne zwalnianie procesów (brak procesów zombie w systemie).
+    Buforowane źródło audio z wielowątkowym buforem jitter (3.0s) i synchronizacją zegara Discord.
+    
+    Rozwiązuje dwa kluczowe problemy:
+    1. Zabezpiecza przed przycinaniem dźwięku przy mikro-lagach sieciowych/proxy (prefetch ~150 ramek PCM).
+    2. Eliminuje zjawisko 'przyspieszonego odtwarzania' (efekt wiewiórki/chipmunk) na początku utworu lub po lagu,
+       synchronizując zegar w AudioPlayer discord.py (resetuje _start i loops), zapobiegając wystrzeliwaniu
+       pakietów z delay=0.
     """
-    def __init__(self, proc: subprocess.Popen, ffmpeg_audio: discord.FFmpegPCMAudio):
+    def __init__(self, proc: subprocess.Popen, ffmpeg_audio: discord.FFmpegPCMAudio, buffer_seconds: float = 3.0):
         self.proc = proc
         self.ffmpeg_audio = ffmpeg_audio
+        self.max_frames = max(50, int(buffer_seconds / 0.02))
+        self.buffer = queue.Queue(maxsize=self.max_frames)
+        self.voice_client = None
+        self._stopped = threading.Event()
         self._cleaned = False
+        self._first_read = True
+
+        self.reader_thread = threading.Thread(target=self._reader_loop, daemon=True, name="AudioBufferReader")
+        self.reader_thread.start()
+
+    def _reader_loop(self):
+        try:
+            while not self._stopped.is_set():
+                data = self.ffmpeg_audio.read()
+                if not data:
+                    self.buffer.put(None)
+                    break
+                self.buffer.put(data)
+        except Exception:
+            try:
+                self.buffer.put(None)
+            except Exception:
+                pass
 
     def read(self) -> bytes:
-        return self.ffmpeg_audio.read()
+        # Anti-burst clock synchronization dla Discord AudioPlayer
+        if self.voice_client:
+            player = getattr(self.voice_client, '_player', None)
+            if player:
+                if self._first_read:
+                    self._first_read = False
+                    player._start = time.perf_counter()
+                    player.loops = 0
+                else:
+                    expected_time = player._start + player.DELAY * player.loops
+                    if time.perf_counter() - expected_time > 0.06:
+                        player._start = time.perf_counter()
+                        player.loops = 0
+
+        try:
+            item = self.buffer.get(timeout=5.0)
+            if item is None:
+                return b''
+            return item
+        except queue.Empty:
+            return b''
 
     def is_opus(self) -> bool:
         return self.ffmpeg_audio.is_opus()
@@ -98,6 +146,7 @@ class YTDLStreamAudioSource(discord.AudioSource):
         if self._cleaned:
             return
         self._cleaned = True
+        self._stopped.set()
         try:
             self.ffmpeg_audio.cleanup()
         except Exception as e:
@@ -926,7 +975,8 @@ class Music(commands.Cog):
             logger.info(f"Rozpoczynam odtwarzanie utworu (potok yt-dlp -> FFmpeg): [{next_index + 1}/{len(queue)}] {song['title']} (Serwer: {guild_id})")
             proc = await loop.run_in_executor(None, lambda: self.create_ytdl_process(song['webpage_url']))
             raw_audio = discord.FFmpegPCMAudio(proc.stdout, pipe=True, options='-vn')
-            stream_source = YTDLStreamAudioSource(proc, raw_audio)
+            stream_source = BufferedAudioSource(proc, raw_audio, buffer_seconds=3.0)
+            stream_source.voice_client = voice_client
 
             vol = self.guild_volumes.get(guild_id, 100) / 100.0
             source = discord.PCMVolumeTransformer(stream_source, volume=vol)
