@@ -116,11 +116,25 @@ class YTDLStreamAudioSource(discord.AudioSource):
 
 class QueuePaginationView(discord.ui.View):
     """Widok paginacji kolejki z przyciskami przełączania stron (po 10 utworów)."""
-    def __init__(self, cog, guild_id: int, page: int = 0):
+    def __init__(self, cog, guild_id: int, page: Optional[int] = None):
         super().__init__(timeout=180)
         self.cog = cog
         self.guild_id = guild_id
-        self.page = page
+
+        queue = self.cog.get_queue(self.guild_id)
+        current_idx = self.cog.queue_indices.get(self.guild_id, 0)
+        total_pages = max(1, (len(queue) + 9) // 10)
+
+        # Otwieramy kolejkę bezpośrednio na stronie z aktualnie odtwarzanym utworem
+        if page is None:
+            if 0 <= current_idx < len(queue):
+                self.page = current_idx // 10
+            else:
+                self.page = 0
+        else:
+            self.page = page
+
+        self.page = min(max(0, self.page), total_pages - 1)
         self.update_buttons()
 
     def update_buttons(self):
@@ -133,6 +147,7 @@ class QueuePaginationView(discord.ui.View):
 
     def build_embed(self) -> discord.Embed:
         queue = self.cog.get_queue(self.guild_id)
+        current_idx = self.cog.queue_indices.get(self.guild_id, -1)
         total = len(queue)
         total_pages = max(1, (total + 9) // 10)
         repeat_tag = " [🔁 Repeat]" if self.cog.repeat_mode.get(self.guild_id, False) else ""
@@ -149,7 +164,13 @@ class QueuePaginationView(discord.ui.View):
         if not page_songs:
             embed.description = "*Kolejka jest pusta.*"
         else:
-            lines = [f"{i}. {song['title']}" for i, song in enumerate(page_songs, start=start_idx + 1)]
+            lines = []
+            for i, song in enumerate(page_songs, start=start_idx):
+                num = i + 1
+                if i == current_idx:
+                    lines.append(f"▶️ **{num}. {song['title']}** *(Teraz odtwarzane)*")
+                else:
+                    lines.append(f"`{num}.` {song['title']}")
             embed.description = "\n".join(lines)
 
         embed.set_footer(text=f"Strona {self.page + 1} z {total_pages} • Pozycje {start_idx + 1}-{min(end_idx, total)} z {total}")
@@ -183,7 +204,7 @@ class QueuePaginationView(discord.ui.View):
     async def shuffle_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         queue = self.cog.get_queue(self.guild_id)
         if len(queue) >= 2:
-            random.shuffle(queue)
+            self.cog.shuffle_queue(self.guild_id)
             logger.info(f"Przelosowano kolejkę z poziomu widoku /queue na serwerze {self.guild_id}")
         self.update_buttons()
         await interaction.response.edit_message(embed=self.build_embed(), view=self)
@@ -243,6 +264,8 @@ class SearchSelect(discord.ui.Select):
         await interaction.response.edit_message(content=f"✅ Selected: **{selected_track['title']}**", view=self.view)
 
         if not voice_client.is_playing() and not voice_client.is_paused():
+            if self.cog.queue_indices.get(self.guild_id, -1) == -1 or self.cog.queue_indices.get(self.guild_id, 0) >= len(queue) - 1:
+                self.cog.queue_indices[self.guild_id] = len(queue) - 2
             self.cog.play_next(interaction)
             msg = await interaction.followup.send(f"🎵 Now playing: **{selected_track['title']}**")
         else:
@@ -402,8 +425,8 @@ class MusicDashboardView(discord.ui.View):
         if len(queue) < 2:
             await interaction.response.send_message("❌ Za mało utworów w kolejce do przelosowania.", ephemeral=True)
             return
-        random.shuffle(queue)
-        await interaction.response.send_message(f"🔀 Przelosowano kolejność **{len(queue)}** utworów!", ephemeral=True)
+        cog.shuffle_queue(guild_id)
+        await interaction.response.send_message(f"🔀 Przelosowano kolejność utworów w kolejce!", ephemeral=True)
         await cog.update_dashboard(guild_id)
 
     @discord.ui.button(emoji="🔁", label="Powtarzaj", style=discord.ButtonStyle.secondary, custom_id="sb_repeat")
@@ -413,8 +436,9 @@ class MusicDashboardView(discord.ui.View):
             return
         curr = cog.repeat_mode.get(guild_id, False)
         cog.repeat_mode[guild_id] = not curr
+        cog.save_state()
         st = "WŁĄCZONE 🔁" if cog.repeat_mode[guild_id] else "WYŁĄCZONE ⏹️"
-        await interaction.response.send_message(f"🔁 Powtarzanie kolejki: **{st}**", ephemeral=True)
+        await interaction.response.send_message(f"🔁 Powtarzanie całej kolejki: **{st}**", ephemeral=True)
         await cog.update_dashboard(guild_id)
 
     @discord.ui.button(emoji="🛑", label="Zatrzymaj", style=discord.ButtonStyle.danger, custom_id="sb_stop")
@@ -426,10 +450,12 @@ class MusicDashboardView(discord.ui.View):
         if vc:
             if cog and guild_id:
                 cog.get_queue(guild_id).clear()
+                cog.queue_indices[guild_id] = -1
+                cog.skip_to_indices.pop(guild_id, None)
                 cog.current_song.pop(guild_id, None)
             vc.stop()
             await vc.disconnect()
-            await interaction.response.send_message("🛑 Zatrzymano muzykę i rozłączono bota.", ephemeral=True)
+            await interaction.response.send_message("🛑 Zatrzymano muzykę, wyczyszczono kolejkę i rozłączono bota.", ephemeral=True)
         else:
             await interaction.response.send_message("Bot nie jest połączony z kanałem głosowym.", ephemeral=True)
         if cog and guild_id:
@@ -445,7 +471,7 @@ class MusicDashboardView(discord.ui.View):
             repeat_status = " (🔁 Repeat: WŁĄCZONE)" if cog.repeat_mode.get(guild_id, False) else ""
             await interaction.response.send_message(f"📜 Kolejka jest w tej chwili całkowicie pusta.{repeat_status}", ephemeral=True)
             return
-        view = QueuePaginationView(cog, guild_id, page=0)
+        view = QueuePaginationView(cog, guild_id, page=None)
         embed = view.build_embed()
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
@@ -467,6 +493,8 @@ class Music(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.queues = {}             # {guild_id: [{'title': str, 'webpage_url': str}, ...]}
+        self.queue_indices = {}      # {guild_id: int} (bieżący indeks w playliście, 0-based)
+        self.skip_to_indices = {}    # {guild_id: int} (docelowy indeks dla /skipto)
         self.current_song = {}       # {guild_id: dict}
         self.repeat_mode = {}        # {guild_id: bool}
         self.music_channels = {}     # {guild_id: int (channel_id)}
@@ -482,7 +510,7 @@ class Music(commands.Cog):
         self.bot.add_view(MusicDashboardView(self))
 
     def load_state(self):
-        """Wczytuje zapisany stan kanałów, dashboardów, głośności i konfiguracji z pliku."""
+        """Wczytuje zapisany stan kanałów, dashboardów, głośności, repeat i konfiguracji z pliku."""
         try:
             if os.path.exists(STATE_FILE):
                 with open(STATE_FILE, "r", encoding="utf-8") as f:
@@ -491,18 +519,20 @@ class Music(commands.Cog):
                     self.dashboard_metadata = {int(k): v for k, v in data.get("dashboards", {}).items()}
                     self.guild_volumes = {int(k): v for k, v in data.get("guild_volumes", {}).items()}
                     self.auto_leave_config = {int(k): v for k, v in data.get("auto_leave_config", {}).items()}
-                    logger.info("Wczytano zapisany stan dashboardów, ograniczeń kanałów, głośności i auto-leave.")
+                    self.repeat_mode = {int(k): v for k, v in data.get("repeat_mode", {}).items()}
+                    logger.info("Wczytano zapisany stan dashboardów, ograniczeń kanałów, głośności, repeat i auto-leave.")
         except Exception as e:
             logger.warning(f"Nie udało się wczytać stanu z {STATE_FILE}: {e}")
 
     def save_state(self):
-        """Zapisuje bieżący stan kanałów, dashboardów, głośności i konfiguracji do pliku."""
+        """Zapisuje bieżący stan kanałów, dashboardów, głośności, repeat i konfiguracji do pliku."""
         try:
             data = {
                 "music_channels": {str(k): v for k, v in self.music_channels.items()},
                 "dashboards": {str(k): v for k, v in self.dashboard_metadata.items()},
                 "guild_volumes": {str(k): v for k, v in self.guild_volumes.items()},
-                "auto_leave_config": {str(k): v for k, v in self.auto_leave_config.items()}
+                "auto_leave_config": {str(k): v for k, v in self.auto_leave_config.items()},
+                "repeat_mode": {str(k): v for k, v in self.repeat_mode.items()}
             }
             with open(STATE_FILE, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
@@ -531,6 +561,24 @@ class Music(commands.Cog):
         if guild_id not in self.queues:
             self.queues[guild_id] = []
         return self.queues[guild_id]
+
+    def shuffle_queue(self, guild_id: int):
+        """Przelosowuje kolejkę z zachowaniem aktualnie odtwarzanego utworu na bieżącej pozycji."""
+        queue = self.get_queue(guild_id)
+        if len(queue) < 2:
+            return
+        current_idx = self.queue_indices.get(guild_id, 0)
+        if 0 <= current_idx < len(queue):
+            current_song = queue[current_idx]
+            other_songs = [s for i, s in enumerate(queue) if i != current_idx]
+            random.shuffle(other_songs)
+            queue.clear()
+            queue.append(current_song)
+            queue.extend(other_songs)
+            self.queue_indices[guild_id] = 0
+        else:
+            random.shuffle(queue)
+            self.queue_indices[guild_id] = 0
 
     def generate_dashboard_embed(self, guild_id: int) -> discord.Embed:
         """Tworzy estetyczny Embed reprezentujący aktualny stan bota dla dashboardu."""
@@ -561,8 +609,14 @@ class Music(commands.Cog):
         else:
             status = "Rozłączony ⏹️"
 
+        current_idx = self.queue_indices.get(guild_id, -1)
+        if 0 <= current_idx < len(queue):
+            queue_str = f"{current_idx + 1}/{len(queue)}"
+        else:
+            queue_str = f"{len(queue)}/{MAX_QUEUE_SIZE}"
+
         embed.add_field(name="Status", value=status, inline=True)
-        embed.add_field(name="W kolejce", value=f"{len(queue)}/{MAX_QUEUE_SIZE}", inline=True)
+        embed.add_field(name="W kolejce", value=queue_str, inline=True)
         embed.add_field(name="Zapętlenie", value="Włączone 🔁" if repeat else "Wyłączone ⏹️", inline=True)
         embed.set_footer(text="Steruj przyciskami poniżej lub używaj komend slash (/play, /skip itd.)")
         return embed
@@ -808,7 +862,7 @@ class Music(commands.Cog):
         asyncio.run_coroutine_threadsafe(coro, self.bot.loop)
 
     async def _play_next_async(self, interaction: discord.Interaction):
-        """Asynchroniczne pobranie świeżego linku audio i odtworzenie kolejnego utworu (Lazy Loading)."""
+        """Asynchroniczne pobranie strumienia i odtworzenie kolejnego utworu w stałej playliście."""
         guild_id = interaction.guild.id
         queue = self.get_queue(guild_id)
         voice_client = interaction.guild.voice_client
@@ -819,10 +873,11 @@ class Music(commands.Cog):
             await self.update_dashboard(guild_id)
             return
 
-        # Jeśli kolejka jest pusta
+        # Jeśli kolejka jest całkowicie pusta
         if not queue:
             self.current_song.pop(guild_id, None)
-            logger.info(f"Kolejka odtwarzania na serwerze {guild_id} dobiegła końca.")
+            self.queue_indices[guild_id] = -1
+            logger.info(f"Kolejka odtwarzania na serwerze {guild_id} jest pusta.")
             await self.update_presence(None)
             await self.update_dashboard(guild_id)
             
@@ -833,20 +888,42 @@ class Music(commands.Cog):
                     logger.info(f"SubWoofer opuścił kanał po zakończeniu odtwarzania kolejki (G:{guild_id}).")
             return
 
-        # Pobieramy kolejny utwór z kolejki
-        song = queue.pop(0)
-        self.current_song[guild_id] = song
+        # Wyznaczamy indeks kolejnego utworu
+        if guild_id in self.skip_to_indices:
+            next_index = self.skip_to_indices.pop(guild_id)
+        else:
+            current_idx = self.queue_indices.get(guild_id, -1)
+            next_index = current_idx + 1
 
-        # Jeśli włączony jest tryb repeat: wrzucamy utwór z powrotem na koniec kolejki
-        if self.repeat_mode.get(guild_id, False):
-            queue.append({'title': song['title'], 'webpage_url': song['webpage_url']})
+        # Sprawdzamy czy osiągnęliśmy koniec playlisty
+        if next_index >= len(queue):
+            if self.repeat_mode.get(guild_id, False):
+                next_index = 0
+                logger.info(f"Osiągnięto koniec playlisty na serwerze {guild_id}. Zapętlenie aktywne: powrót do utworu #1.")
+            else:
+                self.current_song.pop(guild_id, None)
+                self.queue_indices[guild_id] = -1
+                logger.info(f"Kolejka odtwarzania na serwerze {guild_id} dobiegła końca.")
+                await self.update_presence(None)
+                await self.update_dashboard(guild_id)
+                if voice_client.is_connected():
+                    await voice_client.disconnect()
+                    logger.info(f"SubWoofer opuścił kanał po zakończeniu kolejki (G:{guild_id}).")
+                return
+
+        if next_index < 0 or next_index >= len(queue):
+            next_index = 0
+
+        self.queue_indices[guild_id] = next_index
+        song = queue[next_index]
+        self.current_song[guild_id] = song
 
         # LAZY LOADING + DIRECT PIPE STREAMING (yt-dlp -> stdout -> FFmpeg stdin):
         # Pobieramy strumień w czasie rzeczywistym przez potok systemowy w pamięci RAM.
         # Eliminuje to opóźnienie pobierania całego pliku, zrywanie połączeń i throttling YouTube CDN.
         loop = asyncio.get_event_loop()
         try:
-            logger.info(f"Rozpoczynam odtwarzanie utworu (potok yt-dlp -> FFmpeg): {song['title']} (Serwer: {guild_id})")
+            logger.info(f"Rozpoczynam odtwarzanie utworu (potok yt-dlp -> FFmpeg): [{next_index + 1}/{len(queue)}] {song['title']} (Serwer: {guild_id})")
             proc = await loop.run_in_executor(None, lambda: self.create_ytdl_process(song['webpage_url']))
             raw_audio = discord.FFmpegPCMAudio(proc.stdout, pipe=True, options='-vn')
             stream_source = YTDLStreamAudioSource(proc, raw_audio)
@@ -867,7 +944,7 @@ class Music(commands.Cog):
 
         except Exception as e:
             logger.error(f"Wystąpił błąd podczas startu odtwarzania na serwerze {guild_id}: {e}")
-            if not queue and not self.repeat_mode.get(guild_id, False):
+            if not self.repeat_mode.get(guild_id, False) and (next_index + 1 >= len(queue)):
                 if voice_client.is_connected():
                     await voice_client.disconnect()
                 await self.update_presence(None)
@@ -894,6 +971,8 @@ class Music(commands.Cog):
                     self.auto_leave_tasks.pop(guild_id, None)
                 self.current_song.pop(guild_id, None)
                 self.get_queue(guild_id).clear()
+                self.queue_indices[guild_id] = -1
+                self.skip_to_indices.pop(guild_id, None)
                 await self.update_presence(None)
                 await self.update_dashboard(guild_id)
                 logger.info(f"Bot został odłączony z kanału na serwerze {guild.id}. Stan wyczyszczony.")
@@ -909,11 +988,11 @@ class Music(commands.Cog):
                 minutes = cfg.get('minutes', 10)
                 if guild.id not in self.auto_leave_tasks or self.auto_leave_tasks[guild.id].done():
                     logger.info(f"Kanał #{bot_channel.name} opustoszał. Zaplanowano auto-leave za {minutes} min (G:{guild.id}).")
-                    self.auto_leave_tasks[guild.id] = asyncio.create_task(self._auto_leave_timer(guild.id, minutes * 60))
+                    self.auto_leave_tasks[guild_id] = asyncio.create_task(self._auto_leave_timer(guild.id, minutes * 60))
         else:
             if guild.id in self.auto_leave_tasks and not self.auto_leave_tasks[guild.id].done():
                 self.auto_leave_tasks[guild.id].cancel()
-                self.auto_leave_tasks.pop(guild.id, None)
+                self.auto_leave_tasks.pop(guild_id, None)
                 logger.info(f"Użytkownik dołączył do #{bot_channel.name}. Anulowano timer auto-leave (G:{guild.id}).")
 
     async def _auto_leave_timer(self, guild_id: int, delay_seconds: int):
@@ -934,6 +1013,8 @@ class Music(commands.Cog):
                     await vc.disconnect()
                 self.current_song.pop(guild_id, None)
                 self.get_queue(guild_id).clear()
+                self.queue_indices[guild_id] = -1
+                self.skip_to_indices.pop(guild_id, None)
                 await self.update_presence(None)
                 await self.update_dashboard(guild_id)
         except asyncio.CancelledError:
@@ -1025,6 +1106,8 @@ class Music(commands.Cog):
         await self.update_dashboard(interaction.guild.id)
 
         if not voice_client.is_playing() and not voice_client.is_paused():
+            if self.queue_indices.get(interaction.guild.id, -1) == -1 or self.queue_indices.get(interaction.guild.id, 0) >= current_len:
+                self.queue_indices[interaction.guild.id] = current_len - 1
             self.play_next(interaction)
 
     @app_commands.command(name="search", description="Search YouTube and choose from top 5 interactive results")
@@ -1134,6 +1217,7 @@ class Music(commands.Cog):
         guild_id = interaction.guild.id
         current = self.repeat_mode.get(guild_id, False)
         self.repeat_mode[guild_id] = not current
+        self.save_state()
         status = "WŁĄCZONE 🔁" if self.repeat_mode[guild_id] else "WYŁĄCZONE ⏹️"
         logger.info(f"Użytkownik {interaction.user} zmienił repeat na: {status} (G:{guild_id})")
         await interaction.response.send_message(f"🔁 Powtarzanie całej kolejki: **{status}**", ephemeral=True)
@@ -1149,9 +1233,9 @@ class Music(commands.Cog):
             await interaction.response.send_message("❌ Za mało utworów w kolejce, aby przelosować (minimum 2).", ephemeral=True)
             return
 
-        random.shuffle(queue)
+        self.shuffle_queue(interaction.guild.id)
         logger.info(f"Użytkownik {interaction.user} przelosował kolejkę (G:{interaction.guild.id})")
-        await interaction.response.send_message(f"🔀 Przelosowano kolejność **{len(queue)}** utworów w kolejce!", ephemeral=True)
+        await interaction.response.send_message(f"🔀 Przelosowano kolejność utworów w kolejce!", ephemeral=True)
         await self.update_dashboard(interaction.guild.id)
 
     @app_commands.command(name="skipto", description="Skip directly to a specific track number in the queue")
@@ -1168,15 +1252,15 @@ class Music(commands.Cog):
             )
             return
 
-        target_song = queue.pop(position - 1)
-        queue.insert(0, target_song)
+        target_song = queue[position - 1]
+        self.skip_to_indices[interaction.guild.id] = position - 1
 
         voice_client = interaction.guild.voice_client
         if voice_client and (voice_client.is_playing() or voice_client.is_paused()):
             logger.info(f"Użytkownik {interaction.user} użył skipto {position}: {target_song['title']} (G:{interaction.guild.id})")
             voice_client.stop()
             await interaction.response.send_message(
-                f"⏭️ Wymuszono odtworzenie: **{target_song['title']}** (pozostałe utwory zachowane w pierwotnym porządku).",
+                f"⏭️ Przeskoczono do utworu **{position}. {target_song['title']}**.",
                 ephemeral=True
             )
         else:
@@ -1198,10 +1282,22 @@ class Music(commands.Cog):
             )
             return
 
-        song = queue.pop(position - 1)
-        queue.insert(0, song)
+        current_idx = self.queue_indices.get(interaction.guild.id, 0)
+        target_idx = position - 1
+        if target_idx == current_idx:
+            await interaction.response.send_message("Ten utwór jest właśnie odtwarzany!", ephemeral=True)
+            return
+
+        song = queue.pop(target_idx)
+        if target_idx < current_idx:
+            current_idx -= 1
+            self.queue_indices[interaction.guild.id] = current_idx
+
+        insert_pos = current_idx + 1
+        queue.insert(insert_pos, song)
+
         logger.info(f"Użytkownik {interaction.user} ustawił utwór jako następny: {song['title']} (G:{interaction.guild.id})")
-        await interaction.response.send_message(f"⏩ Utwór **{song['title']}** zagra teraz jako następny w kolejce!", ephemeral=True)
+        await interaction.response.send_message(f"⏩ Utwór **{song['title']}** zagra teraz jako następny w kolejce (Pozycja {insert_pos + 1})!", ephemeral=True)
         await self.update_dashboard(interaction.guild.id)
 
     @app_commands.command(name="stop", description="Stop music, clear queue, and disconnect bot")
@@ -1216,6 +1312,8 @@ class Music(commands.Cog):
 
         if voice_client:
             self.get_queue(interaction.guild.id).clear()
+            self.queue_indices[interaction.guild.id] = -1
+            self.skip_to_indices.pop(interaction.guild.id, None)
             self.current_song.pop(interaction.guild.id, None)
             voice_client.stop()
             await voice_client.disconnect()
@@ -1255,7 +1353,7 @@ class Music(commands.Cog):
             await interaction.response.send_message(f"📜 Kolejka jest w tej chwili całkowicie pusta.{repeat_status}", ephemeral=True)
             return
 
-        view = QueuePaginationView(self, interaction.guild.id, page=0)
+        view = QueuePaginationView(self, interaction.guild.id, page=None)
         embed = view.build_embed()
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
