@@ -6,6 +6,7 @@ import asyncio
 import logging
 import random
 import os
+import subprocess
 import json
 import re
 import time
@@ -74,6 +75,43 @@ ytdl_stream = yt_dlp.YoutubeDL(YTDL_STREAM_OPTIONS)
 
 
 STATE_FILE = "bot_state.json"
+
+
+class YTDLStreamAudioSource(discord.AudioSource):
+    """
+    Strumieniowe źródło audio łączące wyjście procesu yt-dlp (stdout) z wejściem FFmpegPCMAudio.
+    Zapewnia natychmiastowe rozpoczęcie odtwarzania, omijanie throttlingu YouTube CDN
+    oraz pewne i bezpieczne zwalnianie procesów (brak procesów zombie w systemie).
+    """
+    def __init__(self, proc: subprocess.Popen, ffmpeg_audio: discord.FFmpegPCMAudio):
+        self.proc = proc
+        self.ffmpeg_audio = ffmpeg_audio
+        self._cleaned = False
+
+    def read(self) -> bytes:
+        return self.ffmpeg_audio.read()
+
+    def is_opus(self) -> bool:
+        return self.ffmpeg_audio.is_opus()
+
+    def cleanup(self):
+        if self._cleaned:
+            return
+        self._cleaned = True
+        try:
+            self.ffmpeg_audio.cleanup()
+        except Exception as e:
+            logger.debug(f"Błąd podczas czyszczenia FFmpegPCMAudio: {e}")
+        try:
+            if self.proc and self.proc.poll() is None:
+                self.proc.terminate()
+                try:
+                    self.proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    self.proc.kill()
+        except Exception as e:
+            logger.debug(f"Błąd podczas zamykania podprocesu yt-dlp: {e}")
+
 
 
 class QueuePaginationView(discord.ui.View):
@@ -579,6 +617,33 @@ class Music(commands.Cog):
             return False
         return True
 
+    def create_ytdl_process(self, webpage_url: str) -> subprocess.Popen:
+        """Uruchamia podproces yt-dlp wyprowadzający bezpośredni strumień audio na standardowe wyjście (stdout)."""
+        cmd = [
+            'yt-dlp',
+            '-f', 'bestaudio/best',
+            '-o', '-',
+            '--quiet',
+            '--no-warnings',
+        ]
+        if YTDL_PROXY:
+            cmd.extend(['--proxy', YTDL_PROXY])
+        if os.path.exists(COOKIE_FILE):
+            cmd.extend(['--cookies', COOKIE_FILE])
+
+        cmd.append(webpage_url)
+
+        creationflags = 0
+        if platform.system() == "Windows":
+            creationflags = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
+        return subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags
+        )
+
     async def get_stream_url(self, webpage_url: str):
         """Wyciąga świeży bezpośredni link audio tuż przed startem odtwarzania (Lazy Loading)."""
         loop = asyncio.get_event_loop()
@@ -776,29 +841,22 @@ class Music(commands.Cog):
         if self.repeat_mode.get(guild_id, False):
             queue.append({'title': song['title'], 'webpage_url': song['webpage_url']})
 
-        # LAZY LOADING: Pobieramy świeży link audio tuż przed startem
-        stream_url = await self.get_stream_url(song['webpage_url'])
-        if not stream_url:
-            logger.warning(f"Nie udało się wyciągnąć strumienia dla '{song['title']}', pomijam...")
-            if not queue and not self.repeat_mode.get(guild_id, False):
-                if voice_client.is_connected():
-                    await voice_client.disconnect()
-                    logger.info(f"Rozłączono po błędzie odtwarzania ostatniego utworu (G:{guild_id}).")
-                await self.update_presence(None)
-                await self.update_dashboard(guild_id)
-                return
-            self.play_next(interaction)
-            return
-
+        # LAZY LOADING + DIRECT PIPE STREAMING (yt-dlp -> stdout -> FFmpeg stdin):
+        # Pobieramy strumień w czasie rzeczywistym przez potok systemowy w pamięci RAM.
+        # Eliminuje to opóźnienie pobierania całego pliku, zrywanie połączeń i throttling YouTube CDN.
+        loop = asyncio.get_event_loop()
         try:
-            logger.info(f"Rozpoczynam odtwarzanie utworu: {song['title']} (Serwer: {guild_id})")
-            raw_source = discord.FFmpegPCMAudio(stream_url, **FFMPEG_OPTIONS)
+            logger.info(f"Rozpoczynam odtwarzanie utworu (potok yt-dlp -> FFmpeg): {song['title']} (Serwer: {guild_id})")
+            proc = await loop.run_in_executor(None, lambda: self.create_ytdl_process(song['webpage_url']))
+            raw_audio = discord.FFmpegPCMAudio(proc.stdout, pipe=True, options='-vn')
+            stream_source = YTDLStreamAudioSource(proc, raw_audio)
+
             vol = self.guild_volumes.get(guild_id, 100) / 100.0
-            source = discord.PCMVolumeTransformer(raw_source, volume=vol)
+            source = discord.PCMVolumeTransformer(stream_source, volume=vol)
 
             def after_playing(error):
                 if error:
-                    logger.error(f"Błąd FFmpeg podczas odtwarzania utworu: {error}")
+                    logger.error(f"Błąd odtwarzacza podczas odtwarzania utworu: {error}")
                 self.play_next(interaction)
 
             voice_client.play(source, after=after_playing)
@@ -808,13 +866,14 @@ class Music(commands.Cog):
             await self.update_dashboard(guild_id)
 
         except Exception as e:
-            logger.error(f"Wystąpił błąd w FFmpeg podczas startu odtwarzania na serwerze {guild_id}: {e}")
+            logger.error(f"Wystąpił błąd podczas startu odtwarzania na serwerze {guild_id}: {e}")
             if not queue and not self.repeat_mode.get(guild_id, False):
                 if voice_client.is_connected():
                     await voice_client.disconnect()
                 await self.update_presence(None)
                 await self.update_dashboard(guild_id)
                 return
+            self.play_next(interaction)
     # ==========================================
     # SYSTEM AUTO-DISCONNECT PRZY PUSTYM KANALE
     # ==========================================
